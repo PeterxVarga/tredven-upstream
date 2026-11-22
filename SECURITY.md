@@ -1,6 +1,6 @@
 # Security
 
-**Pre-alpha / source-only prototype.** Tredven Upstream does not access a live upstream, cluster, Docker socket, production database or credentials. It does not grant operational authority.
+**Pre-alpha local-first CLI with unsigned release candidates.** Tredven Upstream does not access a live cluster, Docker socket, production database or application credentials. Some explicitly selected commands invoke external scanners or query public APIs; see the opt-in boundaries below. It does not grant operational authority.
 
 ## Data handling
 
@@ -24,7 +24,7 @@
 
 ## Native scanner evidence trust boundary (R6)
 
-- `inspect-scan` consumes bounded local Trivy JSON schema v2 or OSV-Scanner v2 JSON. **The CLI never runs either scanner**, and parsing a JSON file is not independent proof of tool execution, coverage, currentness, vulnerability database quality, source commit or image identity. Scanner versions and policies can change; unknown/malformed/unsupported reports fail to `UNKNOWN`, not READY.
+- `inspect-scan` consumes bounded local Trivy JSON schema v2 or OSV-Scanner v2 JSON. **This parser command does not execute either scanner.** The opt-in `review-local` and `review-upgrade` executable scan paths are different, as documented under R10 and R18 below. Parsing imported JSON is not independent proof of tool execution, coverage, currentness, vulnerability database quality, source commit or image identity. Scanner versions and policies can change; unknown/malformed/unsupported reports fail to `UNKNOWN`, not READY.
 - `inspect-upgrade` combines local Git tag inspection with the scanner bytes. The `--scan-commit` field is a **caller assertion**, compared to the candidate tag; a mismatch is BLOCKED. A matching caller assertion cannot attest that a scanner actually analyzed those bytes. Do not wire its exit code 0 to privileged deploy or merge automation.
 - Inside a watch plan, native scanner evidence must use `status: "unknown"`, not a fabricated `passed`. Results are parsed from the **same exact bytes** that were hashed against the supplied SHA-256, avoiding a hash/parse second-read race. The operator controls the digest and file; **no cryptographic tool or scan signature** is verified.
 - Trivy findings with HIGH/CRITICAL severity or any detected secret are blocking; unrecognized severity, empty results and absent scan coverage are UNKNOWN. OSV advisory occurrences are blocked (no speculative severity conversion); empty/no-package reports are UNKNOWN. Those policies are **conservative heuristics**, not a comprehensive vulnerability triage decision.
@@ -62,6 +62,20 @@
 - **GH security gate:** known GitHub CLI attestation signer-workflow/source-ref vulnerabilities are fixed in gh 2.102.0. R10 refuses older, missing or malformed gh version output before any attestation verification. An exact signed file origin is not proof that a scanner ran or that its source DB is fresh.
 - **No false green:** a persistent critical/advisory finding stays BLOCKED even with zero new findings; unknown/missing scanner source coverage is UNKNOWN, not zero. Signature and source commit mismatches are BLOCKED. The release, production and action authorization flags remain false.
 - **Owner-private receipts:** only --evidence-dir writes the two raw reports and optional original Cargo.lock snapshots. Creates a new no-overwrite 0700 directory and 0600 files, SHA256SUMS integrity, not a signature. These files may reveal package names and original scanner paths; do not publish private scan outputs.
+
+## R18 pinned OSV first use — explicit downloader and network consent
+
+- `review-local --install-pinned-osv` **downloads a third-party executable** from an exact GitHub HTTPS release URL when the per-user cache does not already contain the pinned bytes. It validates the complete SHA-256 and expected byte length before running it; subsequent uses revalidate the cache. This is a byte-identity check, **not** independently verified publisher provenance.
+- The public OSV network permission is separate: `--allow-public-osv-network` is required even when the pinned scanner is already cached. Dependency names and versions can be sent to public OSV services by that scanner. **Do not use the opt-in executable mode for private or sensitive dependencies without approval.**
+- The cache is stored under a private per-user path and refuses final symlinks or unsafe writable cache directories. A separate process with sufficient local filesystem privileges may still pose a race or executable substitution threat; such local attackers are outside the current limited trust assurance. The Tredven archive does **not** redistribute the OSV-Scanner executable.
+- The manual alternative is `--osv-bin FILE --osv-sha256 HEX` with `--allow-public-osv-network`. There is no Tredven telemetry, automatic Git checkout/clone, push, merge or deployment.
+
+## R20 GitHub alpha artifact — source identity and authorization are separate
+
+- The R20 GitHub workflow has only the manual `workflow_dispatch` trigger and an exact repository, owner-actor, repository-ID and `refs/heads/main` job gate. Its planned outputs are a signed build archive and short-lived Actions artifacts, **not** a GitHub Release, deployment or permission to use the binary in production.
+- `scripts/verify_signed_alpha.py` delegates X.509/Sigstore verification to the official GitHub CLI with exact signer workflow, repository, source ref and source SHA policies, and refuses an unsigned local artifact. Offline-bundle verification has a repository-renaming limitation; online GitHub API verification is preferred for current repository identity.
+- The static Linux musl archive carries both locked Rust dependency notices and the toolchain's runtime/musl notices. These are engineering completeness checks, not independent legal review or evidence of commercial distribution rights.
+- Until a separately approved hosted workflow has run and its signature has been independently verified, **the actual GitHub-hosted signing path remains UNKNOWN / NOT RUN**.
 
 ## R11 signed CI run receipts — provenance versus process execution
 
