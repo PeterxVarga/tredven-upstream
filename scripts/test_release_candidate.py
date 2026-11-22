@@ -1,4 +1,4 @@
-"""R8 offline/synthetic release-candidate integrity tests.
+"""R8/R12 offline/synthetic release-candidate integrity and license annex tests.
 
 No GitHub, crates.io, Podman, deployment, publish or private application.
 """
@@ -29,6 +29,7 @@ class ReleaseCandidateTests(unittest.TestCase):
             crate=b"synthetic-source-crate-not-real",
             license_bytes=b"synthetic MIT license\n",
             readme=b"synthetic readme\n",
+            notices=b"synthetic third-party license notices\n",
             source_commit="a"*40,
             version="0.1.0",
             target="x86_64-unknown-linux-gnu",
@@ -103,13 +104,52 @@ class ReleaseCandidateTests(unittest.TestCase):
 
     def test_rehashed_changed_binary_cannot_avoid_original_binary_hash(self):
         archive_file=next(self.dest.glob("*.tar.gz"))
-        archive_file.write_bytes(m.archive_bytes(b"forged-executable",self.args["license_bytes"],self.args["readme"]))
+        archive_file.write_bytes(m.archive_bytes(b"forged-executable",self.args["license_bytes"],self.args["readme"],self.args["notices"]))
         manifest_file=self.dest/"manifest.json"
         manifest=json.loads(manifest_file.read_text())
         manifest["artifacts"]["archive"]["sha256"]=m.sha(archive_file.read_bytes())
         manifest_file.write_bytes(m.json_bytes(manifest))
         self.recompute_all_checksums()
         with self.assertRaisesRegex(m.InvalidCandidate,"CANDIDATE_BINARY_DIGEST_MISMATCH"):
+            m.verify_candidate(self.dest)
+
+    def test_archive_contains_license_annex(self):
+        import io
+        import tarfile
+        archive_file=next(self.dest.glob("*.tar.gz"))
+        with tarfile.open(fileobj=io.BytesIO(archive_file.read_bytes()),mode="r:gz") as tar:
+            self.assertEqual(tar.extractfile("THIRD_PARTY_NOTICES.txt").read(),self.args["notices"])
+
+    def test_missing_license_annex_is_blocked_even_if_rehashed(self):
+        import io
+        import tarfile
+        archive_file=next(self.dest.glob("*.tar.gz"))
+        buf=io.BytesIO()
+        with tarfile.open(fileobj=buf,mode="w:gz") as output:
+            with tarfile.open(archive_file,mode="r:gz") as original:
+                for member in original:
+                    if member.name!="THIRD_PARTY_NOTICES.txt":
+                        output.addfile(member,original.extractfile(member))
+        archive_file.write_bytes(buf.getvalue())
+        manifest_file=self.dest/"manifest.json"
+        manifest=json.loads(manifest_file.read_text())
+        manifest["artifacts"]["archive"]["sha256"]=m.sha(archive_file.read_bytes())
+        manifest_file.write_bytes(m.json_bytes(manifest))
+        self.recompute_all_checksums()
+        with self.assertRaisesRegex(m.InvalidCandidate,"UNEXPECTED_ARCHIVE_FILE_SCOPE"):
+            m.verify_candidate(self.dest)
+
+    def test_changed_notices_blocked_even_with_rehashed_archive(self):
+        archive_file=next(self.dest.glob("*.tar.gz"))
+        archive_file.write_bytes(m.archive_bytes(
+            self.args["binary"],self.args["license_bytes"],self.args["readme"],
+            b"unexpected legal notices"))
+        manifest_file=self.dest/"manifest.json"
+        manifest=json.loads(manifest_file.read_text())
+        manifest["artifacts"]["archive"]["sha256"]=m.sha(archive_file.read_bytes())
+        manifest_file.write_bytes(m.json_bytes(manifest))
+        self.recompute_all_checksums()
+        with self.assertRaisesRegex(m.InvalidCandidate,"CANDIDATE_LICENSE_NOTICES_DIGEST_MISMATCH"):
             m.verify_candidate(self.dest)
 
     def recompute_all_checksums(self):
@@ -146,6 +186,67 @@ class ReleaseCandidateTests(unittest.TestCase):
             "verify","--dir",str(self.dest)],capture_output=True,text=True,check=False)
         self.assertEqual(result.returncode,2)
         self.assertIn("BLOCKED_LOCAL_RELEASE_CANDIDATE",result.stderr)
+
+class LicenseAnnexTests(unittest.TestCase):
+    def setUp(self):
+        from unittest import mock
+        from types import SimpleNamespace
+        self.mock=mock
+        self.ns=SimpleNamespace
+        self.work=tempfile.TemporaryDirectory(prefix="tredven-r12-licenses-")
+        self.addCleanup(self.work.cleanup)
+        self.root=Path(self.work.name)
+        self.repo=self.root/"repo"
+        self.repo.mkdir()
+        self.crate=self.root/"registry"/"src"/"index"/"fixture-1.2.3"
+        self.crate.mkdir(parents=True)
+        (self.crate/"Cargo.toml").write_text('[package]\nname = "fixture"\n')
+        (self.crate/"LICENSE-MIT").write_text("Copyright 2026 Test Holder\n")
+        (self.crate/"LICENSE-UNICODE").write_text("Unicode test condition\n")
+        self.source="registry+https://github.com/rust-lang/crates.io-index"
+        (self.repo/"Cargo.lock").write_text(
+            'version = 4\n[[package]]\nname = "fixture"\n'
+            'version = "1.2.3"\nsource = "'+self.source+'"\n')
+        self.package=dict(name="fixture",version="1.2.3",source=self.source,
+                          manifest_path=str(self.crate/"Cargo.toml"),
+                          license="MIT AND Unicode-3.0",license_file=None)
+        self.env={"CARGO_HOME":str(self.root)}
+
+    def _build(self,packages):
+        result=self.ns(stdout=json.dumps({"packages":packages}))
+        with self.mock.patch.object(m.subprocess,"run",return_value=result) as runner:
+            output=m.build_third_party_notices(self.repo,self.env)
+            self.assertIn("--offline",runner.call_args.args[0])
+            self.assertIn("--locked",runner.call_args.args[0])
+            return output
+
+    def test_keeps_complete_license_text_without_license_guessing(self):
+        text=self._build([self.package]).decode()
+        self.assertIn("MIT AND Unicode-3.0",text)
+        self.assertIn("Copyright 2026 Test Holder",text)
+        self.assertIn("Unicode test condition",text)
+        self.assertIn("Registry packages: 1",text)
+        self.assertIn(m.sha((self.repo/"Cargo.lock").read_bytes()),text)
+
+    def test_fails_closed_without_original_license_files(self):
+        (self.crate/"LICENSE-MIT").unlink()
+        (self.crate/"LICENSE-UNICODE").unlink()
+        with self.assertRaisesRegex(m.InvalidCandidate,"UPSTREAM_LICENSE_TEXT_MISSING"):
+            self._build([self.package])
+
+    def test_fails_closed_on_incomplete_metadata(self):
+        with self.assertRaisesRegex(m.InvalidCandidate,"CARGO_METADATA_LOCKED_CRATES_MISMATCH"):
+            self._build([])
+
+    def test_does_not_read_license_outside_registry(self):
+        outside=self.root/"untrusted"/"fixture-1.2.3"
+        outside.mkdir(parents=True)
+        (outside/"LICENSE-MIT").write_text("do-not-read\n")
+        (outside/"Cargo.toml").write_text("")
+        forged={**self.package,"manifest_path":str(outside/"Cargo.toml")}
+        with self.assertRaisesRegex(m.InvalidCandidate,"UNTRUSTED_UPSTREAM_LICENSE_PATH"):
+            self._build([forged])
+
 
 if __name__=="__main__":
     unittest.main(verbosity=2)
