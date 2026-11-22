@@ -82,6 +82,27 @@ has **not been run or signed**, and a locally fabricated workflow envelope
 is correctly rejected. There is **no live one-click upgrade**.
 See [R29 scope, actual evidence and missing hosted proof](docs/R29_REAL_APP_AND_SIGNED_CI_PROVENANCE.md).
 
+### R30 — GitHub Project Workspace (local first-use preview, Draft only)
+
+Tredven Upstream now has an **authenticated GitHub CLI-backed first-use flow**
+with *no new GitHub token or OAuth scopes*: list all currently accessible
+repositories, classify likely development projects, explicitly select which
+to inspect, and show the identical private project list in a
+**127.0.0.1-only interactive dashboard**. An owner-clicked read-only
+inspection identifies source manifests/CI, open potential upgrade PRs and
+classifies the exact GitHub PR diff with the existing Rust preflight core.
+
+Default selection is **zero**. The workspace is a private 0600 file under
+an owner-created 0700 directory, not a hosted database. Selection is not
+a running scheduled monitor. Repo/PR compatibility remains **UNKNOWN**
+unless actual bound evidence is available; no one-click upgrade or hosted
+GitHub App installation is implemented.
+
+The optional native R29 system gate refuses attaching local test receipts
+to a selected GitHub PR when its source repository or either exact commit
+differs. See [R30 commands, actual GitHub/dashboard E2E, limitations and next
+steps](docs/R30_GITHUB_ZERO_TO_VALUE_WORKSPACE.md).
+
 ## Start here: first-use dependency upgrade review (Rust program, any supported project ecosystem)
 
 **R26 development revision (not yet in the published v0.1.0-alpha.1 binary):**
