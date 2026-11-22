@@ -1,0 +1,138 @@
+# R29: MANUAL OWNER-ONLY signed NEGATIVE system compatibility proof.
+# The application/test suite is public source code; no private data or secrets.
+# No push/PR trigger, merge, auto-upgrade, release or production deployment.
+name: R29 Manual Real-App System Upgrade Evidence
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: r29-owner-manual-real-app-ci
+  cancel-in-progress: false
+
+jobs:
+  real-api-worker-postgres:
+    if: >-
+      github.repository == 'PeterxVarga/tredven-upstream' &&
+      github.repository_id == 1467524521 &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'workflow_dispatch' &&
+      github.actor == 'PeterxVarga' &&
+      github.triggering_actor == 'PeterxVarga'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out reviewed protected main without credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 pinned
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Verify owner, repository and pinned CI source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "PeterxVarga/tredven-upstream"
+          test "$GITHUB_REPOSITORY_ID" = "1467524521"
+          test "$GITHUB_ACTOR" = "PeterxVarga"
+          test "$GITHUB_TRIGGERING_ACTOR" = "PeterxVarga"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_EVENT_NAME" = "workflow_dispatch"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain --untracked-files=all)"
+
+      - name: Prepare isolated GitHub-hosted ephemeral Podman runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Sudo here applies exclusively to this disposable hosted runner,
+          # NEVER to the user's Fedora host, VPS, or production machine.
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq podman uidmap passt
+          podman info --format '{{.Host.Security.Rootless}}' | grep -Fx true
+          command -v pasta
+          python3 --version
+          git --version
+
+      - name: Build the reviewed Rust tool, no provider writes
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.100.0 --profile minimal
+          cargo +1.100.0 build --locked
+          ./target/debug/tredven-upstream --help | grep -F 'qualify-system'
+          ./target/debug/tredven-upstream --help | grep -F 'verify-system-ci'
+
+      - name: Fetch exact public application commit and build disposable image
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/r29_prepare_public_app_test.sh
+
+      - name: Execute real API, worker, broker and database migration E2E
+        shell: bash
+        run: |
+          set -euo pipefail
+          export TREDVEN_R29_RUST_CLI="$GITHUB_WORKSPACE/target/debug/tredven-upstream"
+          python3 -I -B scripts/r29_real_public_app_upgrade_e2e.py \
+            --output-name r29-hosted-real-app-ci
+          python3 - <<'PY'
+          import json,pathlib
+          p=pathlib.Path('output/r29-hosted-real-app-ci')
+          r=json.loads((p/'r29-local-real-app-evidence.json').read_text())
+          gate=json.loads((p/'r29-real-app-rust-gate.json').read_text())
+          assert r['result']=='REAL_APPLICATION_MIGRATION_COMPATIBLE_ROLLBACK_WITH_NEW_WRITES_BLOCKED'
+          assert r['post_cutover_new_writes_lost_on_rollback'] is True
+          assert gate['decision']=='BLOCKED'
+          assert gate['covered_required_checks']==7 and gate['total_required_checks']==8
+          assert r['one_click_upgrade_authorized'] is False
+          PY
+
+      - name: Build exact source, workflow and test-receipt-bound CI manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -I -B scripts/r29_make_signed_ci_manifest.py \
+            --evidence-dir "$GITHUB_WORKSPACE/output/r29-hosted-real-app-ci" \
+            --out "$GITHUB_WORKSPACE/output/r29-hosted-real-app-ci/r29-ci-run.receipt.json"
+
+      - name: Sign exact CI run manifest with official GitHub/Sigstore
+        id: signed
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2 pinned
+        with:
+          subject-path: ${{ github.workspace }}/output/r29-hosted-real-app-ci/r29-ci-run.receipt.json
+
+      - name: Copy bounded attestation bundle for independent verification
+        shell: bash
+        env:
+          ATTESTATION_BUNDLE: ${{ steps.signed.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          test -n "$ATTESTATION_BUNDLE"
+          test -f "$ATTESTATION_BUNDLE"
+          test ! -L "$ATTESTATION_BUNDLE"
+          bytes=$(wc -c < "$ATTESTATION_BUNDLE")
+          test "$bytes" -gt 500 && test "$bytes" -le 2097152
+          install -m 0600 "$ATTESTATION_BUNDLE" \
+            "$GITHUB_WORKSPACE/output/r29-hosted-real-app-ci/r29-ci.attestation.bundle.jsonl"
+
+      - name: Upload only synthetic test receipts and signed manifest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4 pinned
+        with:
+          name: r29-real-app-signed-negative-evidence
+          path: |
+            ${{ github.workspace }}/output/r29-hosted-real-app-ci/r29-ci-run.receipt.json
+            ${{ github.workspace }}/output/r29-hosted-real-app-ci/r29-ci.attestation.bundle.jsonl
+            ${{ github.workspace }}/output/r29-hosted-real-app-ci/r29-local-real-app-evidence.json
+            ${{ github.workspace }}/output/r29-hosted-real-app-ci/r29-real-app-rust-gate.json
+            ${{ github.workspace }}/output/r29-hosted-real-app-ci/receipt-*.json
+          if-no-files-found: error
+          retention-days: 7
+
+# No automatic permissions on successful test claims: this scenario MUST BLOCK
+# one-click rollout because rollback after new writes would lose data.

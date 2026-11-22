@@ -23,7 +23,8 @@ fn usage() -> &'static str {
      Usage: tredven-upstream inspect-upgrade-delta --repo DIR --project ID --from TAG --to TAG --baseline FILE --candidate FILE --scanner trivy-json-v2|osv-scanner-json-v2 --subject TARGET --baseline-commit SHA --candidate-commit SHA [--format json|markdown]\n\
      Usage: tredven-upstream review-local --repo DIR --from TAG --to TAG (--install-pinned-osv | --osv-bin FILE --osv-sha256 HEX) --allow-public-osv-network [--project ID] [--lockfile RELATIVE_PATH] [--format json|markdown] [--evidence-dir NEW_DIRECTORY]\n\
      Usage: tredven-upstream review-upgrade --config FILE [--format json|markdown] [--evidence-dir NEW_DIRECTORY]\n\
-     Usage: tredven-upstream qualify-system --config FILE [--stage-dir NEW_PRIVATE_DIRECTORY]\n\
+     Usage: tredven-upstream qualify-system --config FILE [--stage-dir NEW_PRIVATE_DIRECTORY]\n\\
+     Usage: tredven-upstream verify-system-ci --manifest FILE --evidence-dir DIR --policy POLICY.json\n\
      Usage: tredven-upstream verify-attestation --artifact FILE --repo OWNER/REPO --repo-id NUM --signer-workflow OWNER/REPO/.github/workflows/NAME.yml --source-ref refs/tags/TAG --source-commit SHA --bundle FILE --trusted-root FILE [--predicate-type URL] [--format json|markdown]\n\
      Shortcut: tredven-upstream verify-attestation --artifact FILE --policy POLICY.json [--format json|markdown]\n\
      Usage: tredven-upstream inspect-attested-scan --artifact REPORT.json --scanner trivy-json-v2|osv-scanner-json-v2 --subject TARGET --repo OWNER/REPO --repo-id NUM --signer-workflow OWNER/REPO/.github/workflows/NAME.yml --source-ref refs/tags/TAG --source-commit SHA --bundle FILE --trusted-root FILE [--format json|markdown]\n\
@@ -978,6 +979,63 @@ fn run_system_upgrade(mut args: impl Iterator<Item = String>) -> Result<u8, Stri
     })
 }
 
+fn run_verify_system_ci(mut args: impl Iterator<Item = String>) -> Result<u8, String> {
+    use tredven_upstream::attestation::Policy;
+    let (mut manifest, mut evidence_dir, mut policy_file) = (None, None, None);
+    while let Some(key) = args.next() {
+        if key == "--help" || key == "-h" {
+            print!("{}", usage());
+            return Ok(0);
+        }
+        let value = args.next().ok_or("MISSING_SYSTEM_CI_OPTION_VALUE")?;
+        let place = match key.as_str() {
+            "--manifest" => &mut manifest,
+            "--evidence-dir" => &mut evidence_dir,
+            "--policy" => &mut policy_file,
+            _ => return Err("UNKNOWN_SYSTEM_CI_OPTION".into()),
+        };
+        if place.replace(value).is_some() {
+            return Err("DUPLICATE_SYSTEM_CI_OPTION".into());
+        }
+    }
+    let manifest = manifest.ok_or("MISSING_SYSTEM_CI_MANIFEST")?;
+    let evidence_dir = evidence_dir.ok_or("MISSING_SYSTEM_CI_EVIDENCE_DIRECTORY")?;
+    let policy_file = policy_file.ok_or("MISSING_SYSTEM_CI_POLICY")?;
+    let path = Path::new(&policy_file);
+    let meta = fs::symlink_metadata(path).map_err(|_| "SYSTEM_CI_POLICY_NOT_FOUND")?;
+    if !meta.file_type().is_file() || meta.len() == 0 || meta.len() > 64 * 1024 {
+        return Err("SYSTEM_CI_POLICY_NOT_BOUNDED_REGULAR_FILE".into());
+    }
+    let bytes = fs::read(path).map_err(|_| "SYSTEM_CI_POLICY_READ_FAILED")?;
+    let mut policy: Policy =
+        serde_json::from_slice(&bytes).map_err(|_| "SYSTEM_CI_POLICY_INVALID_JSON")?;
+    let base = path.parent().unwrap_or(Path::new("."));
+    if let Some(bundle) = policy.bundle.as_mut() {
+        if bundle.is_relative() {
+            *bundle = base.join(&bundle);
+        }
+    }
+    if let Some(root) = policy.trusted_root.as_mut() {
+        if root.is_relative() {
+            *root = base.join(&root);
+        }
+    }
+    let verified = tredven_upstream::system_ci::verify(
+        Path::new(&manifest),
+        Path::new(&evidence_dir),
+        &policy,
+    );
+    let mut stdout = io::stdout().lock();
+    serde_json::to_writer_pretty(&mut stdout, &verified)
+        .map_err(|_| "SYSTEM_CI_REPORT_WRITE_FAILED")?;
+    writeln!(&mut stdout).map_err(|_| "SYSTEM_CI_REPORT_WRITE_FAILED")?;
+    Ok(if verified.signed_ci_provenance_verified {
+        0
+    } else {
+        2
+    })
+}
+
 fn run() -> Result<u8, String> {
     let mut args = env::args().skip(1);
     match args.next().as_deref() {
@@ -995,6 +1053,7 @@ fn run() -> Result<u8, String> {
         Some("review-local") => return run_local_review(args),
         Some("review-upgrade") => return run_review(args),
         Some("qualify-system") => return run_system_upgrade(args),
+        Some("verify-system-ci") => return run_verify_system_ci(args),
         Some("verify-attestation") => return run_attestation(args, false),
         Some("inspect-attested-scan") => return run_attestation(args, true),
         Some("inspect-contract") => return run_contract(args),
