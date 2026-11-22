@@ -1,6 +1,6 @@
 # Tredven Upstream
 
-**An open-source, local-first upgrade preflight for self-hosted software.**
+**An open-source, local-first, evidence-based upgrade review CLI.**
 
 > **Pre-alpha, read-only prototype.** `inspect-git` resolves named tags in a **local Git clone**; `inspect-contract` adds **one exactly pinned OpenSEO PostgreSQL migration prerequisite check**. Neither command authenticates an upstream publisher, fetches source, connects to a running database, executes SQL or certifies a safe upgrade.
 
@@ -14,12 +14,116 @@
 - One **release-specific, source-pinned** SQL/Drizzle contract checks foreign-key parent columns in the *Git-committed baseline schema* without running the SQL.
 - Fail closed: `BLOCKED` for failed checks and contradictory source claims, `REVIEW` for a declared version movement that needs human qualification, `UNKNOWN` for missing evidence.
 - Opt-in multi-project watch plans now combine local Git source changes with externally produced CI/security/backup/rollback evidence in one review report. **Caller-supplied check statuses are not independently verified.**
-- Native **Trivy JSON v2** and **OSV-Scanner v2 JSON** parsing, usable standalone (`inspect-scan`), inside watch plans, or with local Git from one command (`inspect-upgrade`). The CLI does not execute either scanner, authenticate the author or prove complete scan coverage.
+- Native Trivy JSON v2 and OSV-Scanner v2 JSON parsers; the opt-in review-local and review-upgrade paths also execute a user-supplied SHA-pinned OSV binary on two source-bound root Cargo.lock snapshots. No automatic release authority.
 - R7 two-report comparison (`inspect-delta` and Git-tag-bound `inspect-upgrade-delta`), with separate delta and absolute-candidate decisions, strict scope match and no false green from missing scanners.
 - All patch/merge/deploy/send/provider-write/payment/release authority flags are **always false**.
-- Stable, input-bounded, portable source with no runtime network calls or background process.
+- Bounded local processing; only explicitly enabled OSV scans or online attestation verification may use the network. No daemon, telemetry, repository push, merge or deployment.
 
 **NOT supported yet:** independent remote publisher verification; automatic repository cloning/fetching; general SQL parsing or migration execution; arbitrary third-party adapters; Docker/Podman/Kubernetes access; runtime integration testing; live database schema validation; reporting production readiness; managed fleet or billing.
+
+
+## Start here: first-use public Rust upgrade review (R18)
+
+No Tredven cloud account, token, telemetry, prewritten JSON or manually installed
+OSV-Scanner is needed on **Linux x86-64**. Extract the **locally verified,
+unsigned** Tredven archive in a new directory; use its bin/tredven-upstream
+executable. You need only Git, system curl, and a locally cloned public Rust
+repository with two release tags and a root Cargo.lock.
+
+The new --install-pinned-osv switch is an **explicit opt-in to a local file
+write and an HTTPS download** of the official Linux x86-64 OSV-Scanner v2.7.1
+executable (~58 MB) into your user-private cache. The exact size and SHA-256
+are compiled into Tredven, checked before the downloaded executable is ever
+run, and rechecked on every subsequent run. Cached files are reused; a
+modified or symlinked file is rejected without silently overwriting it.
+
+```bash
+# Run from an extracted local release candidate, with Git installed:
+git clone --no-checkout https://github.com/sharkdp/fd.git fd-source
+
+./bin/tredven-upstream review-local \
+  --repo "$PWD/fd-source" \
+  --from v10.4.2 --to v10.5.2 \
+  --install-pinned-osv \
+  --allow-public-osv-network \
+  --format markdown
+```
+
+**Opt-ins:** --install-pinned-osv downloads the pinned official asset (unless
+already verified in cache); --allow-public-osv-network lets the external
+scanner query the public OSV service with package metadata. They must both
+be present. With no opt-ins, no scanner download or OSV API call occurs.
+The cache base defaults to HOME/.cache; an existing absolute XDG_CACHE_HOME
+is supported, but symlinked or group/other-writable cache directories are
+rejected. The managed downloader currently supports **Linux x86-64 only**;
+other platforms can still supply an independently verified external scanner.
+
+Manual existing-scanner mode remains available:
+
+```bash
+./bin/tredven-upstream review-local \
+  --repo "$PWD/fd-source" --from v10.4.2 --to v10.5.2 \
+  --osv-bin /absolute/path/to/verified/osv-scanner \
+  --osv-sha256 fb7dab19a8bd9bbe5c3189f09d4b7ee1820c9553a23bac202648a56efd2f6ee8 \
+  --allow-public-osv-network --format markdown
+```
+
+The example previously produced three resolved public advisories and decision
+**REVIEW**, not automatic approval. Live OSV findings can change; the scanner
+exit code 1 with findings denotes a completed, vulnerable scan, **not** success
+without findings. Use --format json for a machine report. Optional
+--evidence-dir /path/to/new-directory saves the exact raw evidence; never
+place private scan artifacts in a public repository by accident.
+
+**Trust boundary:** Git tags are local objects, not authenticated publisher
+releases. The hardcoded GitHub release digest pins exact OSV bytes; it does
+not establish an independent Sigstore verification. No Tredven service receives
+data, and no command applies updates, pushes, merges, deploys or authorizes
+release. The downloaded OSV executable is **not redistributed in the
+Tredven archive**. The Linux archive is still an unsigned local candidate,
+not an official published signed release.
+
+See [the independent public fd benchmark](docs/R16_FIRST_REAL_VALUE_COMPETITIVE_GATE.md),
+[OSS/paid direction](docs/R17_OSS_PRODUCT_DIRECTION.md), and
+[pinned OSV cache test evidence](docs/R18_PINNED_OSV_FIRST_USE.md).
+
+
+## Linux archive portability and offline release candidates (R19)
+
+The default R12/R18 local release-candidate builder produces a
+`x86_64-unknown-linux-gnu` binary from the host's pinned Rust 1.100.0
+toolchain. On the Fedora build host it uses glibc symbol
+`GLIBC_2.39`: Debian 12 emitted a weak-symbol warning even though
+`--help` exited successfully. **Do not describe this build as
+universally compatible with every Linux distro.**
+
+For an optionally **statically linked** Linux x86-64 archive, the existing
+offline release-candidate builder can use Rust's official musl target.
+Install that toolchain component separately beforehand; the build itself
+does not download crates or OSV:
+
+```bash
+rustup +1.100.0 target add x86_64-unknown-linux-musl
+
+# Run from a clean committed checkout, with the pinned Rust 1.100.0 host.
+python3 -I -B scripts/release_candidate.py build \
+  --portable-musl --out "$PWD/output/portable-musl-local-rc"
+python3 -I -B scripts/release_candidate.py verify \
+  --dir "$PWD/output/portable-musl-local-rc"
+```
+
+This requires the pinned Rust-provided `rust-lld` linker and
+`readelf` to qualify **no ELF interpreter or dynamic dependencies**.
+The archive includes the normal 21-crate third-party license annex plus
+`RUST_RUNTIME_NOTICES.html` copied from the exact pinned toolchain's
+`COPYRIGHT-library.html` and checked by SHA-256 in the local
+manifest. The musl mode does **not** silently change the original GNU
+builder, and a missing runtime notice blocks it.
+
+**This is still an unsigned, unpublished local artifact.** Internal
+license/byte checks do not replace legal review or independent authenticity
+attestation. Windows/macOS and hosted release verification are not covered.
+See [R19 release qualification](docs/R19_OSS_ALPHA_RELEASE_QUALIFICATION.md).
 
 ## Run
 

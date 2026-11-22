@@ -285,6 +285,8 @@ pub struct ScanDeltaReport {
     pub severity_escalations: Option<usize>,
     pub new_blocking_occurrences: Option<usize>,
     pub new_sample: Vec<NewFinding>,
+    /// Bounded list of advisories that disappeared from a comparable scan.
+    pub resolved_sample: Vec<NewFinding>,
     pub findings_sample_truncated: bool,
     pub origin: &'static str,
     pub scanner_execution_attested: bool,
@@ -324,6 +326,15 @@ impl ScanDeltaReport {
                     f.category, f.id, f.package, f.severity
                 ));
             }
+            for f in &self.resolved_sample {
+                s.push_str(&format!(
+                    "- Resolved {} {} [{}] ({})\n",
+                    f.category, f.id, f.package, f.severity
+                ));
+            }
+            if resolved > self.resolved_sample.len() {
+                s.push_str("- More resolved findings omitted\n");
+            }
             if self.findings_sample_truncated {
                 s.push_str("- More new findings omitted\n");
             }
@@ -362,6 +373,7 @@ pub fn compare_reports(
         severity_escalations: None,
         new_blocking_occurrences: None,
         new_sample: Vec::new(),
+        resolved_sample: Vec::new(),
         findings_sample_truncated: false,
         origin: "LOCAL_UNATTESTED_SCANNER_JSON",
         scanner_execution_attested: false,
@@ -416,13 +428,21 @@ pub fn compare_reports(
                     }
                 }
                 out.new_occurrences = Some(new);
-                out.resolved_occurrences = Some(
-                    before
-                        .findings
-                        .keys()
-                        .filter(|k| !after.findings.contains_key(*k))
-                        .count(),
-                );
+                let mut resolved = 0usize;
+                for (key, severity) in &before.findings {
+                    if !after.findings.contains_key(key) {
+                        resolved += 1;
+                        if out.resolved_sample.len() < MAX_SAMPLES {
+                            out.resolved_sample.push(NewFinding {
+                                category: key.category,
+                                package: key.package.clone(),
+                                id: key.id.clone(),
+                                severity: severity.label(),
+                            });
+                        }
+                    }
+                }
+                out.resolved_occurrences = Some(resolved);
                 out.persistent_occurrences = Some(persistent);
                 out.severity_escalations = Some(escalations);
                 out.new_blocking_occurrences = Some(new_blocking);
@@ -496,6 +516,9 @@ mod tests {
         let b = trivy(serde_json::json!([]));
         let r = compare_reports(&a, &b, ScannerFormat::TrivyJsonV2, "same-image");
         assert_eq!(r.resolved_occurrences, Some(1));
+        assert_eq!(r.resolved_sample.len(), 1);
+        assert_eq!(r.resolved_sample[0].id, "TEST-A");
+        assert!(r.to_markdown().contains("Resolved vulnerability TEST-A"));
         assert_eq!(r.overall_decision, DeltaDecision::Review);
         assert!(!r.action_authorized);
     }

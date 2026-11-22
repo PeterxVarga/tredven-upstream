@@ -106,7 +106,7 @@ pub struct Report {
 impl Report {
     pub fn markdown(&self) -> String {
         let n = |v: Option<usize>| v.map_or("UNKNOWN".into(), |n| n.to_string());
-        format!(
+        let mut summary = format!(
             "# Verified upgrade review — not a deployment grant\n\n\
              Project: {}\nSource tags: {} → {}\nCommits: {} → {}\nChanged paths: {}\n\
              Scanner mode: {}\nBaseline: {:?}, candidate: {:?}\n\
@@ -134,7 +134,31 @@ impl Report {
             self.baseline.local_execution_observed,
             self.candidate.local_execution_observed,
             self.all_artifact_signatures_verified
-        )
+        );
+        if self.delta.comparable_scan_scope {
+            if !self.delta.new_sample.is_empty() || !self.delta.resolved_sample.is_empty() {
+                summary.push_str("\nSpecific findings (bounded sample; not a release approval):\n");
+            }
+            for item in &self.delta.new_sample {
+                summary.push_str(&format!(
+                    "- New {} {} [{}] ({})\n",
+                    item.category, item.id, item.package, item.severity
+                ));
+            }
+            for item in &self.delta.resolved_sample {
+                summary.push_str(&format!(
+                    "- Resolved {} {} [{}] ({})\n",
+                    item.category, item.id, item.package, item.severity
+                ));
+            }
+            if self.delta.resolved_occurrences.unwrap_or(0) > self.delta.resolved_sample.len() {
+                summary.push_str("- More resolved findings omitted\n");
+            }
+            if self.delta.findings_sample_truncated {
+                summary.push_str("- More new findings omitted\n");
+            }
+        }
+        summary
     }
 }
 
