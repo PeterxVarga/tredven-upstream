@@ -12,7 +12,9 @@ concurrency:
   cancel-in-progress: false
 jobs:
   public-scanner-proof:
-    if: github.repository == 'PeterxVarga/tredven-upstream'
+    # Permit only a manually dispatched, owner-reviewed default-branch workflow.
+    # GitHub otherwise allows choosing an unreviewed ref at dispatch time.
+    if: github.repository == 'PeterxVarga/tredven-upstream' && github.repository_id == 1467524521 && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -88,14 +90,29 @@ jobs:
             --evidence-dir "$RUNNER_TEMP/r11/evidence" \
             --out "$RUNNER_TEMP/r11/ci-run.receipt.json"
       - name: Sign receipt with official GitHub/Sigstore attestation
+        id: receipt_attestation
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2 pinned
         with:
           subject-path: ${{ runner.temp }}/r11/ci-run.receipt.json
+      - name: Preserve attestation bundle for independent offline verification
+        shell: bash
+        env:
+          ATTESTATION_BUNDLE: ${{ steps.receipt_attestation.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          # The verifier must independently trust the Sigstore root and signer policy.
+          test -n "$ATTESTATION_BUNDLE"
+          test -f "$ATTESTATION_BUNDLE"
+          test ! -L "$ATTESTATION_BUNDLE"
+          size=$(wc -c < "$ATTESTATION_BUNDLE")
+          test "$size" -ge 1000 && test "$size" -le 1048576
+          install -m 0600 "$ATTESTATION_BUNDLE" "$RUNNER_TEMP/r11/ci-run.receipt.attestation.bundle.jsonl"
       - name: Upload only public scanner evidence for independent review
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # pinned v4
         with:
           name: r11-public-osv-evidence
           path: |
+            ${{ runner.temp }}/r11/ci-run.receipt.attestation.bundle.jsonl
             ${{ runner.temp }}/r11/ci-run.receipt.json
             ${{ runner.temp }}/r11/evidence/baseline.Cargo.lock
             ${{ runner.temp }}/r11/evidence/candidate.Cargo.lock

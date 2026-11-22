@@ -19,7 +19,7 @@ ENV={
     "GITHUB_EVENT_NAME":"workflow_dispatch",
     "GITHUB_REPOSITORY":"PeterxVarga/tredven-upstream",
     "GITHUB_REPOSITORY_ID":"1467524521",
-    "GITHUB_REF":"refs/heads/feat/signed-ci-upgrade-review-r11-20261122",
+    "GITHUB_REF":"refs/heads/main",
     "GITHUB_SHA":"a1878d35a2b09ca36dcb39d136cf5ce86c1fe3cf",
     "GITHUB_RUN_ID":"10001",
     "GITHUB_RUN_ATTEMPT":"1",
@@ -54,6 +54,11 @@ class CiReceiptTests(unittest.TestCase):
     def test_wrong_signing_repository_or_id_refused(self):
         os.environ["GITHUB_REPOSITORY_ID"]="999999"
         with self.assertRaisesRegex(ValueError,"UNEXPECTED_SIGNING_REPOSITORY_ID"):
+            m.create_receipt(self.evidence,"attested-delivery/rust-template")
+
+    def test_unreviewed_branch_dispatch_is_not_qualified_for_signing(self):
+        os.environ["GITHUB_REF"]="refs/heads/unreviewed-feature"
+        with self.assertRaisesRegex(ValueError,"UNEXPECTED_SIGNER_SOURCE_REF"):
             m.create_receipt(self.evidence,"attested-delivery/rust-template")
 
     def test_public_scanned_repo_cannot_be_substituted(self):

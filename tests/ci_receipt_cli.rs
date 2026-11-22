@@ -324,6 +324,11 @@ fn manual_workflow_is_never_automatically_triggered() {
     assert!(!text.contains("  push:"));
     assert!(!text.contains("  pull_request:"));
     assert!(!text.contains("  schedule:"));
+    assert!(text.contains("github.ref == 'refs/heads/main'"));
+    assert!(text.contains("github.repository_id == 1467524521"));
+    assert!(text.contains("github.event_name == 'workflow_dispatch'"));
+    assert!(text.contains("steps.receipt_attestation.outputs.bundle-path"));
+    assert!(text.contains("ci-run.receipt.attestation.bundle.jsonl"));
     assert!(text.contains("id-token: write"));
     assert!(text.contains("attestations: write"));
     assert!(

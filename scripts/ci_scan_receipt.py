@@ -45,6 +45,7 @@ def create_receipt(evidence:Path,scanned_repo:str)->dict:
     if repo_id!="1467524521":raise ValueError("UNEXPECTED_SIGNING_REPOSITORY_ID")
     ref=need("GITHUB_REF",r"refs/heads/[A-Za-z0-9_./-]+")
     if ".." in ref:raise ValueError("UNSAFE_SIGNER_SOURCE_REF")
+    if ref!="refs/heads/main":raise ValueError("UNEXPECTED_SIGNER_SOURCE_REF")
     commit=need("GITHUB_SHA",r"[a-fA-F0-9]{40}")
     run_id=need("GITHUB_RUN_ID",r"[1-9][0-9]{0,23}")
     attempt=int(need("GITHUB_RUN_ATTEMPT",r"[1-9][0-9]{0,3}"))
