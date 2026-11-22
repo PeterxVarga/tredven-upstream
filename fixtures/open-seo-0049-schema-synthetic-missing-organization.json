@@ -1,0 +1,15 @@
+{
+  "schema": "synthetic.drizzle.schema-snapshot.fixture.v1",
+  "tables": {
+    "public.user": {
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        }
+      }
+    }
+  }
+}

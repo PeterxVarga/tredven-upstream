@@ -25,7 +25,7 @@ fn safe_tag(tag: &str) -> bool {
         && !tag.contains("@{")
 }
 
-fn git(repo: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
+pub(crate) fn git(repo: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
     // Restrict inherited Git configuration and execution hooks. Git must be installed on PATH.
     // No shell is involved; tags are constrained to a safe input alphabet.
     let mut cmd = Command::new("git");

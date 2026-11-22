@@ -5,7 +5,8 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use tredven_upstream::{
-    Decision, PreflightInput, PreflightReport, git_source::inspect_local_git, inspect, to_markdown,
+    Decision, PreflightInput, PreflightReport, contract::inspect_open_seo_0049,
+    git_source::inspect_local_git, inspect, to_markdown,
 };
 
 const MAX_INPUT_BYTES: u64 = 1024 * 1024;
@@ -14,6 +15,7 @@ fn usage() -> &'static str {
     "Tredven Upstream — local read-only upgrade evidence\n\
      Usage: tredven-upstream inspect --input FILE|--stdin [--format json|markdown]\n\
      Usage: tredven-upstream inspect-git --repo DIR --project ID --from TAG --to TAG [--format json|markdown]\n\
+     Usage: tredven-upstream inspect-contract --repo DIR --project open-seo --profile open-seo-v0.1.31-stripe-projects-0049 [--schema-snapshot FILE] [--format json|markdown]\n\
      Git inspection is local only, never a remote release or production attestation.\n\
      No network, Docker, provider credentials, mutations or deploy permissions.\n"
 }
@@ -80,6 +82,47 @@ fn run_git(mut args: impl Iterator<Item = String>) -> Result<u8, String> {
     emit(&report, &format)
 }
 
+fn run_contract(mut args: impl Iterator<Item = String>) -> Result<u8, String> {
+    let (mut repo, mut project, mut profile, mut schema) = (None, None, None, None);
+    let mut format = "json".to_owned();
+    while let Some(arg) = args.next() {
+        let value = match arg.as_str() {
+            "--help" | "-h" => {
+                print!("{}", usage());
+                return Ok(0);
+            }
+            "--repo" | "--project" | "--profile" | "--schema-snapshot" | "--format" => {
+                args.next().ok_or("MISSING_CONTRACT_ARGUMENT_VALUE")?
+            }
+            _ => return Err("UNRECOGNIZED_CONTRACT_ARGUMENT".into()),
+        };
+        let slot = match arg.as_str() {
+            "--repo" => &mut repo,
+            "--project" => &mut project,
+            "--profile" => &mut profile,
+            "--schema-snapshot" => &mut schema,
+            "--format" => {
+                format = value;
+                continue;
+            }
+            _ => unreachable!(),
+        };
+        if slot.replace(value).is_some() {
+            return Err("CONTRACT_ARGUMENT_SPECIFIED_MORE_THAN_ONCE".into());
+        }
+    }
+    let repo = repo.ok_or("MISSING_CONTRACT_GIT_REPO")?;
+    let project = project.ok_or("MISSING_CONTRACT_PROJECT")?;
+    let profile = profile.ok_or("MISSING_CONTRACT_PROFILE")?;
+    let report = inspect_open_seo_0049(
+        Path::new(&repo),
+        &project,
+        &profile,
+        schema.as_deref().map(Path::new),
+    )?;
+    emit(&report, &format)
+}
+
 fn run() -> Result<u8, String> {
     let mut args = env::args().skip(1);
     match args.next().as_deref() {
@@ -89,6 +132,7 @@ fn run() -> Result<u8, String> {
         }
         Some("inspect") => {}
         Some("inspect-git") => return run_git(args),
+        Some("inspect-contract") => return run_contract(args),
         _ => return Err(usage().trim_end().into()),
     };
 

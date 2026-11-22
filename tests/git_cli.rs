@@ -197,6 +197,42 @@ fn uncommitted_and_untracked_changes_do_not_pollute_pinned_diff() {
 }
 
 #[test]
+fn migration_profile_rejects_unpinned_synthetic_tag_commits() {
+    let repo = Repo::seeded();
+    git(&repo.dir, &["tag", "v0.1.27", "v1.0.0"]);
+    git(&repo.dir, &["tag", "v0.1.31", "v1.1.0"]);
+    let output = repo.cli(&[
+        "inspect-contract",
+        "--repo",
+        repo.dir.to_str().unwrap(),
+        "--project",
+        "open-seo",
+        "--profile",
+        "open-seo-v0.1.31-stripe-projects-0049",
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+    let msg = String::from_utf8(output.stderr).unwrap();
+    assert!(msg.contains("PINNED_PROFILE_RELEASE_COMMIT_MISMATCH"));
+}
+
+#[test]
+fn migration_profile_rejects_wrong_profile_before_reading_source() {
+    let repo = Repo::seeded();
+    let output = repo.cli(&[
+        "inspect-contract",
+        "--repo",
+        repo.dir.to_str().unwrap(),
+        "--project",
+        "open-seo",
+        "--profile",
+        "invented-upgrade",
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+    let msg = String::from_utf8(output.stderr).unwrap();
+    assert!(msg.contains("UNSUPPORTED_PINNED_CONTRACT_PROFILE"));
+}
+
+#[test]
 fn local_git_external_diff_driver_is_not_executed() {
     let repo = Repo::seeded();
     // A test configuration that would break the check if Git invoked it.

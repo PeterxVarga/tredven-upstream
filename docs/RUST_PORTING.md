@@ -30,7 +30,7 @@ The unit/CLI suite now includes disposable local Git repositories with genuine c
 
 1. **COMPLETE (local):** compile a stand-alone Rust binary, deterministic synthetic JSON/Markdown output, fail-closed status, error codes, tests and local formatting/lint checks.
 2. **PARTIAL (local-only):** `inspect-git` verifies named local Git tags, dereferences the exact commit objects and compares changed paths without changing source or fetching data. **NEXT:** verify the upstream publisher and the intended release refs through an explicitly bounded, authenticated or public read-only source path, with honest truncated/unavailable evidence semantics. Do not infer that a local tag proves remote publisher identity.
-3. Add a neutral extension protocol for versioned, declarative source-verified rules and optional application-specific smoke-test evidence. No arbitrary downloaded executable rules.
+3. **PARTIAL (one exact release):** `inspect-contract` has a strictly pinned OpenSEO v0.1.31 foreign-key-parent schema preflight, checked against Git object blobs and synthetic negative fixtures, with no SQL execution. A **general** declarative extension protocol and actual application smoke tests remain unimplemented. No arbitrary downloaded executable rules.
 4. Demonstrate two real public upgrade pairs with a meaningful gap not already handled by Renovate or an application's native migration report.
 5. Only separately and explicitly authorized: public v0.x release, opt-in X communication, and actual budget-holder tests for managed verified intelligence infrastructure.
 
@@ -39,3 +39,7 @@ The unit/CLI suite now includes disposable local Git repositories with genuine c
 Missing verified source, partial diff, unavailable local runtime, untested rollback, corrupt provenance or a newly moved upstream target is **never** interpreted as safe production readiness.
 
 Do not create a second production authority or import Tredven customer data into public test fixtures. Never treat Rust build success, GitHub stars or social reach as paid-user validation.
+
+## R3 source contract proof
+
+A narrow Rust OpenSEO v0.1.31 Stripe Projects 0049 rule detects whether two foreign-key parent columns match the pinned baseline Drizzle source schema; it blocks synthetic malformed inputs. This is not whole adapter equivalence or a real database migration. See [R3 qualification](R3_OPEN_SEO_STRIPE_CONTRACT.md).

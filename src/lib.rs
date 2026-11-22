@@ -1,6 +1,7 @@
 //! Deterministic, side-effect-free upgrade evidence evaluation.
 //! This crate never connects to a host, invokes a shell, or grants release authority.
 
+pub mod contract;
 pub mod git_source;
 
 use serde::{Deserialize, Serialize};
@@ -97,6 +98,26 @@ pub struct ImpactCandidate {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContractPrecondition {
+    pub target: String,
+    pub required: String,
+    pub satisfied_in_snapshot: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContractEvidence {
+    pub profile: String,
+    pub migration_path: String,
+    pub pinned_migration_blob: String,
+    pub schema_snapshot_origin: String,
+    pub conditions: Vec<ContractPrecondition>,
+    pub static_source_contract_matched: bool,
+    pub real_database_checked: bool,
+    pub sql_migration_executed: bool,
+    pub rollback_executed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PreflightReport {
     pub schema: String,
     /// No upstream source or runtime was contacted: input assertions are caller-supplied.
@@ -112,6 +133,8 @@ pub struct PreflightReport {
     pub changed_paths_considered: usize,
     pub impact_classes: BTreeMap<String, usize>,
     pub impact_candidates: Vec<ImpactCandidate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contract_evidence: Option<ContractEvidence>,
     pub checks: Vec<Check>,
     pub reasons: Vec<String>,
     pub next_action: String,
@@ -323,6 +346,7 @@ pub(crate) fn inspect_with_origin(
         changed_paths_considered: input.changed_paths.len(),
         impact_classes: impact,
         impact_candidates,
+        contract_evidence: None,
         checks: input.checks,
         reasons,
         next_action: next_action.into(),
@@ -365,6 +389,26 @@ pub fn to_markdown(r: &PreflightReport) -> String {
             "- {}: {}{}{}\n",
             candidate.category, fence, candidate.path, fence
         ));
+    }
+    if let Some(contract) = &r.contract_evidence {
+        out.push_str("\n## Source-bound migration contract (no SQL execution)\n\n");
+        out.push_str(&format!(
+            "Profile: `{}`; source migration blob: `{}`; schema source: `{}`\n\n",
+            contract.profile, contract.pinned_migration_blob, contract.schema_snapshot_origin
+        ));
+        for condition in &contract.conditions {
+            out.push_str(&format!(
+                "- {}: {} → **{}**\n",
+                condition.target,
+                condition.required,
+                if condition.satisfied_in_snapshot {
+                    "MATCHED_SNAPSHOT"
+                } else {
+                    "MISSING_OR_INCOMPATIBLE"
+                }
+            ));
+        }
+        out.push_str("\n**Real database and migration execution: NOT TESTED.**\n");
     }
     out.push_str("\n## Missing or blocking evidence\n\n");
     for reason in &r.reasons {

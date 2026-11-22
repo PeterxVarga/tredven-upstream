@@ -2,7 +2,7 @@
 
 **An open-source, local-first upgrade preflight for self-hosted software.**
 
-> **Pre-alpha, read-only prototype.** The new `inspect-git` command verifies named tags and commit objects in an **existing local Git clone**. It does **not** independently authenticate upstream publishers, fetch source over the network, inspect a production runtime, run your application tests, or certify a safe upgrade. Do not use its status as permission to deploy.
+> **Pre-alpha, read-only prototype.** `inspect-git` resolves named tags in a **local Git clone**; `inspect-contract` adds **one exactly pinned OpenSEO PostgreSQL migration prerequisite check**. Neither command authenticates an upstream publisher, fetches source, connects to a running database, executes SQL or certifies a safe upgrade.
 
 [MIT license](LICENSE) · Rust 2024 · Works without an account, Docker socket or hosted service.
 
@@ -11,11 +11,12 @@
 - One Rust binary to inspect a **local JSON file or stdin** and emit a machine-readable JSON or Markdown review.
 - Compare caller-supplied commits with explicit unverified provenance, or use `inspect-git` to resolve two named tags and obtain a complete **local** changed-path list (no Git checkout or fetch).
 - Consume explicit check results (`passed`, `failed`, `not_run`, `unknown`); list at most 25 paths prioritized for **human review**, not semantic breakage certification.
+- One **release-specific, source-pinned** SQL/Drizzle contract checks foreign-key parent columns in the *Git-committed baseline schema* without running the SQL.
 - Fail closed: `BLOCKED` for failed checks and contradictory source claims, `REVIEW` for a declared version movement that needs human qualification, `UNKNOWN` for missing evidence.
 - All patch/merge/deploy/send/provider-write/payment/release authority flags are **always false**.
 - Stable, input-bounded, portable source with no runtime network calls or background process.
 
-**NOT supported yet:** independent remote tag/publisher verification; automatic repository cloning/fetching; third-party adapter registration; automatic migration discovery or execution; Docker/Podman/Kubernetes access; integration-test orchestration; reliable assessment of a live self-hosted application; reporting true production readiness; managed fleet or billing.
+**NOT supported yet:** independent remote publisher verification; automatic repository cloning/fetching; general SQL parsing or migration execution; arbitrary third-party adapters; Docker/Podman/Kubernetes access; runtime integration testing; live database schema validation; reporting production readiness; managed fleet or billing.
 
 ## Run
 
@@ -42,7 +43,19 @@ cargo run --locked -- inspect-git \
 
 This command uses the installed local Git executable without any shell interpolation, hooks, external diff tools, network requests, Docker or provider credentials. It does not modify the checkout; local uncommitted files do **not** contribute to the two-tag diff. It checks local commit identities, **not** whether they correspond to signed or currently deployed official releases. Non-UTF-8 Git filenames and overly large diffs are rejected rather than silently accepted as complete.
 
-Example (report excerpt):
+For the **exact public OpenSEO** v0.1.27 → v0.1.31 upgrade (requires an existing local copy of [every-app/open-seo](https://github.com/every-app/open-seo) with both tags):
+
+```bash
+cargo run --locked -- inspect-contract \
+  --repo /absolute/path/to/your/open-seo-clone \
+  --project open-seo \
+  --profile open-seo-v0.1.31-stripe-projects-0049 \
+  --format markdown
+```
+
+This specifically checks `public.user(id)` and `public.organization(id)` in the **original upstream baseline Drizzle snapshot**, after verifying the source release commits and exact migration blob. It does **not** check whether your real database has those tables. Three completely synthetic schema fixtures are included for REVIEW/BLOCKED examples. Details: [R3 migration contract and test proof](docs/R3_OPEN_SEO_STRIPE_CONTRACT.md).
+
+Example (unverified JSON report excerpt):
 
 ```json
 {
@@ -62,7 +75,7 @@ Example (report excerpt):
 }
 ```
 
-There is **no telemetry or required cloud account**. For `inspect`, any `source_verified: true` field means *the caller asserts this*. For `inspect-git`, the report identifies its actual origin as `LOCAL_GIT_OBJECTS_REMOTE_UNATTESTED`. Neither path independently verifies a remote publisher, production runtime, database rollback, business correctness or authorized upgrade.
+There is **no telemetry or required cloud account**. For `inspect`, any `source_verified: true` field is *caller asserted*. For `inspect-git` and `inspect-contract`, the report source origin is `LOCAL_GIT_OBJECTS_REMOTE_UNATTESTED`. The R3 contract also records whether the checked schema is the Git baseline or an unverified caller-supplied fixture. None of these paths verifies a remote publisher, deployed database, migration execution, rollback or business correctness.
 
 ## How the prototype decides
 
@@ -74,7 +87,7 @@ There is **no telemetry or required cloud account**. For `inspect`, any `source_
 
 No current combination of inputs produces `READY`: that status would require independently obtained source/runtime evidence and an explicit external approval boundary. A green Cargo test does not establish a safe upgrade for your application.
 
-The output is **advisory only**. A `REVIEW` decision may remain appropriate even after local tag comparison because there are no independently executed runtime/rollback checks. Path categories and review candidates are heuristics, not proof of a breaking change. See the [source-pinned public Git validation](docs/R2_SOURCE_QUALIFICATION.md).
+The output is **advisory only**. `REVIEW` remains appropriate after local tag and migration contract checks because there are no executed runtime/rollback checks. Missing required columns in a supplied synthetic snapshot produce `BLOCKED` **for that snapshot**, not a claim about any live database. Source paths are heuristics, not proven breakages. See [R2 Git source qualification](docs/R2_SOURCE_QUALIFICATION.md) and [R3 contract validation](docs/R3_OPEN_SEO_STRIPE_CONTRACT.md).
 
 ## Development direction
 
