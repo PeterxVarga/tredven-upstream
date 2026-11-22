@@ -23,6 +23,7 @@ fn usage() -> &'static str {
      Usage: tredven-upstream inspect-upgrade-delta --repo DIR --project ID --from TAG --to TAG --baseline FILE --candidate FILE --scanner trivy-json-v2|osv-scanner-json-v2 --subject TARGET --baseline-commit SHA --candidate-commit SHA [--format json|markdown]\n\
      Usage: tredven-upstream review-local --repo DIR --from TAG --to TAG (--install-pinned-osv | --osv-bin FILE --osv-sha256 HEX) --allow-public-osv-network [--project ID] [--lockfile RELATIVE_PATH] [--format json|markdown] [--evidence-dir NEW_DIRECTORY]\n\
      Usage: tredven-upstream review-upgrade --config FILE [--format json|markdown] [--evidence-dir NEW_DIRECTORY]\n\
+     Usage: tredven-upstream github-workspace discover|list|select|review|qualify|dashboard --state PRIVATE_FILE [--id REPO_ID] [--on|--off] [--pr NUMBER] [--config LOCAL_R29_JSON] [--gh GH_BINARY]\n\
      Usage: tredven-upstream qualify-system --config FILE [--stage-dir NEW_PRIVATE_DIRECTORY]\n\\
      Usage: tredven-upstream verify-system-ci --manifest FILE --evidence-dir DIR --policy POLICY.json\n\
      Usage: tredven-upstream verify-attestation --artifact FILE --repo OWNER/REPO --repo-id NUM --signer-workflow OWNER/REPO/.github/workflows/NAME.yml --source-ref refs/tags/TAG --source-commit SHA --bundle FILE --trusted-root FILE [--predicate-type URL] [--format json|markdown]\n\
@@ -30,7 +31,7 @@ fn usage() -> &'static str {
      Usage: tredven-upstream inspect-attested-scan --artifact REPORT.json --scanner trivy-json-v2|osv-scanner-json-v2 --subject TARGET --repo OWNER/REPO --repo-id NUM --signer-workflow OWNER/REPO/.github/workflows/NAME.yml --source-ref refs/tags/TAG --source-commit SHA --bundle FILE --trusted-root FILE [--format json|markdown]\n\
      Alternative: same verify-attestation arguments with --online instead of --bundle/--trusted-root (explicitly enables GitHub API lookups).\n\
      Git inspection is local only, never a remote release or production attestation.\n\
-     No Docker, provider writes, mutations or deploy permissions. Only attestation commands with --online request public GitHub API lookups.\n"
+     No Docker, provider writes, mutations or deploy permissions. github-workspace uses the existing gh login for read-only GitHub API calls; attestation commands only use online lookups with --online.\n"
 }
 
 fn fail(message: &str) -> ExitCode {
@@ -1036,6 +1037,97 @@ fn run_verify_system_ci(mut args: impl Iterator<Item = String>) -> Result<u8, St
     })
 }
 
+fn run_workspace(mut args: impl Iterator<Item = String>) -> Result<u8, String> {
+    let operation = args.next().ok_or("GITHUB_WORKSPACE_ACTION_REQUIRED")?;
+    let (mut state, mut id, mut pr, mut gh, mut config) = (None, None, None, None, None);
+    let (mut on, mut off) = (false, false);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--help" | "-h" => {
+                print!("{}", usage());
+                return Ok(0);
+            }
+            "--on" => {
+                if on {
+                    return Err("DUPLICATE_SELECTION_FLAG".into());
+                }
+                on = true;
+            }
+            "--off" => {
+                if off {
+                    return Err("DUPLICATE_SELECTION_FLAG".into());
+                }
+                off = true;
+            }
+            "--state" | "--id" | "--pr" | "--gh" | "--config" => {
+                let val = args.next().ok_or("MISSING_GITHUB_WORKSPACE_VALUE")?;
+                let slot = match arg.as_str() {
+                    "--state" => &mut state,
+                    "--id" => &mut id,
+                    "--pr" => &mut pr,
+                    "--gh" => &mut gh,
+                    "--config" => &mut config,
+                    _ => unreachable!(),
+                };
+                if slot.replace(val).is_some() {
+                    return Err("DUPLICATE_GITHUB_WORKSPACE_OPTION".into());
+                }
+            }
+            _ => return Err("UNKNOWN_GITHUB_WORKSPACE_OPTION".into()),
+        }
+    }
+    let state = state.ok_or("GITHUB_WORKSPACE_PRIVATE_STATE_FILE_REQUIRED")?;
+    let file = Path::new(&state);
+    let gh = gh.unwrap_or_else(|| "gh".into());
+    let repo_id = id
+        .map(|i| i.parse::<u64>().map_err(|_| "INVALID_GITHUB_REPO_ID"))
+        .transpose()?;
+    let pr = pr
+        .map(|i| i.parse::<u64>().map_err(|_| "INVALID_GITHUB_PR_NUMBER"))
+        .transpose()?;
+    if on && off {
+        return Err("CONFLICTING_MONITOR_SELECTION".into());
+    }
+    let output = match operation.as_str() {
+        "discover" if config.is_none() && repo_id.is_none() && pr.is_none() && !on && !off => {
+            tredven_upstream::workspace::sync(file, &gh)?
+        }
+        "list" if config.is_none() && repo_id.is_none() && pr.is_none() && !on && !off => {
+            tredven_upstream::workspace::load(file)?
+        }
+        "select" if config.is_none() && pr.is_none() && on != off => {
+            tredven_upstream::workspace::set_selected(
+                file,
+                repo_id.ok_or("SELECT_REPO_ID_REQUIRED")?,
+                on,
+            )?
+        }
+        "review" if config.is_none() && !on && !off => tredven_upstream::workspace::review(
+            file,
+            repo_id.ok_or("REVIEW_REPO_ID_REQUIRED")?,
+            &gh,
+            pr,
+        )?,
+        "qualify" if !on && !off => tredven_upstream::workspace::qualify_selected_pr(
+            file,
+            &gh,
+            repo_id.ok_or("QUALIFY_REPO_ID_REQUIRED")?,
+            pr.ok_or("QUALIFY_PR_REQUIRED")?,
+            Path::new(&config.ok_or("QUALIFY_EXISTING_R29_CONFIG_REQUIRED")?),
+        )?,
+        "dashboard" if config.is_none() && repo_id.is_none() && pr.is_none() && !on && !off => {
+            tredven_upstream::workspace::serve(file, &gh)?;
+            return Ok(0);
+        }
+        _ => return Err("INVALID_GITHUB_WORKSPACE_ACTION_OR_OPTIONS".into()),
+    };
+    let mut stdout = io::stdout().lock();
+    serde_json::to_writer_pretty(&mut stdout, &output)
+        .map_err(|_| "WORKSPACE_OUTPUT_SERIALIZATION_FAILED")?;
+    writeln!(&mut stdout).map_err(|_| "WORKSPACE_OUTPUT_WRITE_FAILED")?;
+    Ok(0)
+}
+
 fn run() -> Result<u8, String> {
     let mut args = env::args().skip(1);
     match args.next().as_deref() {
@@ -1053,6 +1145,7 @@ fn run() -> Result<u8, String> {
         Some("review-local") => return run_local_review(args),
         Some("review-upgrade") => return run_review(args),
         Some("qualify-system") => return run_system_upgrade(args),
+        Some("github-workspace") => return run_workspace(args),
         Some("verify-system-ci") => return run_verify_system_ci(args),
         Some("verify-attestation") => return run_attestation(args, false),
         Some("inspect-attested-scan") => return run_attestation(args, true),

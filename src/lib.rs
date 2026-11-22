@@ -13,6 +13,7 @@ pub mod review;
 pub mod scanner;
 pub mod system_ci;
 pub mod system_upgrade;
+pub mod workspace;
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
