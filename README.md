@@ -1,6 +1,6 @@
 # Tredven Upstream
 
-**An open-source, local-first, evidence-based upgrade review CLI.**
+**An open-source Rust CLI for source-bound upstream upgrade impact and compatibility review.**
 
 > **Experimental alpha, read-only dependency upgrade review.** The previous signed Linux `v0.1.0-alpha.1` is [publicly downloadable](https://github.com/PeterxVarga/tredven-upstream/releases/tag/v0.1.0-alpha.1); **the new R26 multi-ecosystem support described below is NOT included in that release**. The tool reads local Git commits and known scanner formats but never certifies a safe upgrade or grants production/deployment authority.
 
@@ -19,8 +19,36 @@
 - All patch/merge/deploy/send/provider-write/payment/release authority flags are **always false**.
 - Bounded local processing; only explicitly enabled OSV scans or online attestation verification may use the network. No daemon, telemetry, repository push, merge or deployment.
 
-**NOT supported yet:** independent remote publisher verification; automatic repository cloning/fetching; general SQL parsing or migration execution; arbitrary third-party adapters; Docker/Podman/Kubernetes access; runtime integration testing; live database schema validation; reporting production readiness; managed fleet or billing.
+**NOT supported yet:** full production compatibility discovery and one-click live upgrades; independent remote publisher verification; automatic repository cloning/fetching; general SQL parsing or migration execution; arbitrary third-party adapters; Docker/Podman/Kubernetes access; runtime integration testing; live database schema validation; reporting production readiness; managed fleet or billing.
 
+
+## System-aware upgrade checks — R27 development branch (NOT the published alpha)
+
+The product goal is **understand every impacted service, test the candidate against
+its connected systems, then offer an owner-approved one-action upgrade**. Rust is
+the implementation language, not a restriction on the tool being upgraded.
+
+The new `qualify-system` command reads two version-pinned Git Compose manifests,
+discovers declared dependencies (including transitive consumers), and requests
+health/integration tests for impacted services, rollback proof, and data migration
+proof for stateful services. It checks source commit, service identity, Compose
+SHA-256 and raw test-evidence SHA-256 before trusting each supplied status.
+
+```bash
+./bin/tredven-upstream qualify-system --config ./system-upgrade.json
+
+# After all declared, source-bound checks match (local review ONLY):
+./bin/tredven-upstream qualify-system --config ./system-upgrade.json \
+  --stage-dir ./new-private-review-candidate
+```
+
+The optional staging command writes **only a new private local review folder**;
+it never changes your repository or starts/stops any service. Even complete
+self-reported test receipts are `REVIEW`, **not production compatibility proof**.
+Actual automatic runtime integration testing, tracing beyond Compose, live
+one-click upgrades and rollback automation are **not yet implemented**.
+The [R27 real PostgreSQL 16→17 persisted-data failure](docs/R27_SYSTEM_INTEGRATION_COMPATIBILITY_GATE.md)
+shows why these gates matter. No live system, GitHub Release or deployment was touched.
 
 ## Start here: first-use dependency upgrade review (Rust program, any supported project ecosystem)
 
