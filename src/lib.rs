@@ -6,6 +6,7 @@ pub mod ci_receipt;
 pub mod contract;
 pub mod delta;
 pub mod git_source;
+pub mod osv_bootstrap;
 pub mod plan;
 pub mod review;
 pub mod scanner;

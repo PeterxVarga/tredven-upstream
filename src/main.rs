@@ -21,7 +21,7 @@ fn usage() -> &'static str {
      Usage: tredven-upstream inspect-upgrade --repo DIR --project ID --from TAG --to TAG --scanner trivy-json-v2|osv-scanner-json-v2 --scan-report FILE --subject TARGET --scan-commit SHA [--format json|markdown]\n\
      Usage: tredven-upstream inspect-delta --baseline FILE --candidate FILE --scanner trivy-json-v2|osv-scanner-json-v2 --subject TARGET [--format json|markdown]\n\
      Usage: tredven-upstream inspect-upgrade-delta --repo DIR --project ID --from TAG --to TAG --baseline FILE --candidate FILE --scanner trivy-json-v2|osv-scanner-json-v2 --subject TARGET --baseline-commit SHA --candidate-commit SHA [--format json|markdown]\n\
-     Usage: tredven-upstream review-local --repo DIR --from TAG --to TAG --osv-bin FILE --osv-sha256 HEX --allow-public-osv-network [--project ID] [--format json|markdown] [--evidence-dir NEW_DIRECTORY]\n\
+     Usage: tredven-upstream review-local --repo DIR --from TAG --to TAG (--install-pinned-osv | --osv-bin FILE --osv-sha256 HEX) --allow-public-osv-network [--project ID] [--format json|markdown] [--evidence-dir NEW_DIRECTORY]\n\
      Usage: tredven-upstream review-upgrade --config FILE [--format json|markdown] [--evidence-dir NEW_DIRECTORY]\n\
      Usage: tredven-upstream verify-attestation --artifact FILE --repo OWNER/REPO --repo-id NUM --signer-workflow OWNER/REPO/.github/workflows/NAME.yml --source-ref refs/tags/TAG --source-commit SHA --bundle FILE --trusted-root FILE [--predicate-type URL] [--format json|markdown]\n\
      Shortcut: tredven-upstream verify-attestation --artifact FILE --policy POLICY.json [--format json|markdown]\n\
@@ -756,6 +756,7 @@ fn run_local_review(mut args: impl Iterator<Item = String>) -> Result<u8, String
         (None, None, None, None, None, None);
     let (mut format, mut evidence) = (None, None);
     let mut network = false;
+    let mut install_pinned_osv = false;
     while let Some(arg) = args.next() {
         if ["--help", "-h"].contains(&arg.as_str()) {
             print!("{}", usage());
@@ -766,6 +767,13 @@ fn run_local_review(mut args: impl Iterator<Item = String>) -> Result<u8, String
                 return Err("DUPLICATE_PUBLIC_OSV_NETWORK_OPT_IN".into());
             }
             network = true;
+            continue;
+        }
+        if arg == "--install-pinned-osv" {
+            if install_pinned_osv {
+                return Err("DUPLICATE_PINNED_OSV_INSTALL_OPT_IN".into());
+            }
+            install_pinned_osv = true;
             continue;
         }
         let value = args.next().ok_or("MISSING_LOCAL_REVIEW_OPTION_VALUE")?;
@@ -791,19 +799,38 @@ fn run_local_review(mut args: impl Iterator<Item = String>) -> Result<u8, String
     if !["json", "markdown"].contains(&format) {
         return Err("UNSUPPORTED_FORMAT".into());
     }
+    // Require well-formed user arguments before any potential download.
+    let repo = repo.ok_or("MISSING_LOCAL_REVIEW_REPO")?;
+    let from = from.ok_or("MISSING_LOCAL_REVIEW_FROM")?;
+    let to = to.ok_or("MISSING_LOCAL_REVIEW_TO")?;
+    let project = project.unwrap_or_else(|| "local-upgrade".into());
+    let (bin, sha) = if install_pinned_osv {
+        if bin.is_some() || sha.is_some() {
+            return Err("PINNED_OSV_INSTALL_CONFLICTS_WITH_MANUAL_SCANNER".into());
+        }
+        // Never fetch or execute a scanner for an unresolvable local Git pair.
+        tredven_upstream::git_source::inspect_local_git(Path::new(&repo), &project, &from, &to)?;
+        let (path, sha) = tredven_upstream::osv_bootstrap::ensure_pinned()?;
+        (path.to_string_lossy().into_owned(), sha.to_owned())
+    } else {
+        (
+            bin.ok_or("MISSING_LOCAL_REVIEW_SCANNER")?,
+            sha.ok_or("MISSING_LOCAL_REVIEW_SCANNER_SHA256")?,
+        )
+    };
     // Keep this a thin adapter: existing parse_config/review gates are
     // authoritative; no duplicate scanner/process or provenance subsystem.
     let request = serde_json::json!({
         "schema": tredven_upstream::review::SCHEMA,
-        "project": project.as_deref().unwrap_or("local-upgrade"),
-        "repo": repo.ok_or("MISSING_LOCAL_REVIEW_REPO")?,
-        "baseline_tag": from.ok_or("MISSING_LOCAL_REVIEW_FROM")?,
-        "candidate_tag": to.ok_or("MISSING_LOCAL_REVIEW_TO")?,
+        "project": project,
+        "repo": repo,
+        "baseline_tag": from,
+        "candidate_tag": to,
         "scan": {
             "mode": "local-osv-lockfile",
             "lockfile": "Cargo.lock",
-            "binary": bin.ok_or("MISSING_LOCAL_REVIEW_SCANNER")?,
-            "binary_sha256": sha.ok_or("MISSING_LOCAL_REVIEW_SCANNER_SHA256")?,
+            "binary": bin,
+            "binary_sha256": sha,
             "allow_public_osv_network": true
         }
     });

@@ -22,50 +22,70 @@
 **NOT supported yet:** independent remote publisher verification; automatic repository cloning/fetching; general SQL parsing or migration execution; arbitrary third-party adapters; Docker/Podman/Kubernetes access; runtime integration testing; live database schema validation; reporting production readiness; managed fleet or billing.
 
 
-## Start here: local free OSS upgrade review (R17)
+## Start here: first-use public Rust upgrade review (R18)
 
-No cloud account, API token, hosted database or handwritten JSON configuration
-is required. You need a local Git clone containing two release tags and root
-Cargo.lock files, and a separately installed, SHA-256 verified OSV-Scanner v2
-executable. The CLI itself neither clones source nor downloads scanner binaries.
+No Tredven cloud account, token, telemetry, prewritten JSON or manually installed
+OSV-Scanner is needed on **Linux x86-64**. Extract the **locally verified,
+unsigned** Tredven archive in a new directory; use its bin/tredven-upstream
+executable. You need only Git, system curl, and a locally cloned public Rust
+repository with two release tags and a root Cargo.lock.
 
-Extract a locally checksummed release-candidate archive and run the
-extracted bin/tredven-upstream executable from that directory (or build
-from source with Cargo). The local archive is **unsigned and unpublished**.
-
-The example uses the real public sharkdp/fd repository and the official
-**Linux amd64 OSV-Scanner v2.7.1** executable. Do not use this exact checksum
-with other OSV versions or platforms.
+The new --install-pinned-osv switch is an **explicit opt-in to a local file
+write and an HTTPS download** of the official Linux x86-64 OSV-Scanner v2.7.1
+executable (~58 MB) into your user-private cache. The exact size and SHA-256
+are compiled into Tredven, checked before the downloaded executable is ever
+run, and rechecked on every subsequent run. Cached files are reused; a
+modified or symlinked file is rejected without silently overwriting it.
 
 ```bash
+# Run from an extracted local release candidate, with Git installed:
 git clone --no-checkout https://github.com/sharkdp/fd.git fd-source
-git -C fd-source fetch --tags
 
 ./bin/tredven-upstream review-local \
   --repo "$PWD/fd-source" \
   --from v10.4.2 --to v10.5.2 \
-  --osv-bin /absolute/path/to/verified/osv-scanner \
-  --osv-sha256 fb7dab19a8bd9bbe5c3189f09d4b7ee1820c9553a23bac202648a56efd2f6ee8 \
+  --install-pinned-osv \
   --allow-public-osv-network \
   --format markdown
 ```
 
-Expected example result: three resolved advisories and **REVIEW**, not an
-automatic upgrade approval. An exit 1 from the scanner with findings indicates
-a completed but vulnerable scan, not a clean scan. The default output is an
-actionable Markdown summary; `--format json` emits the machine report.
-`--evidence-dir /path/to/new-directory` saves exact byte-bound
-evidence, only if the target directory does not already exist.
+**Opt-ins:** --install-pinned-osv downloads the pinned official asset (unless
+already verified in cache); --allow-public-osv-network lets the external
+scanner query the public OSV service with package metadata. They must both
+be present. With no opt-ins, no scanner download or OSV API call occurs.
+The cache base defaults to HOME/.cache; an existing absolute XDG_CACHE_HOME
+is supported, but symlinked or group/other-writable cache directories are
+rejected. The managed downloader currently supports **Linux x86-64 only**;
+other platforms can still supply an independently verified external scanner.
 
-**Privacy and authority:** the explicit `--allow-public-osv-network`
-flag allows the external scanner to query public OSV services with dependency
-metadata. Do not scan private/sensitive manifests without authorization.
-No Tredven cloud service receives your inputs. Local Git tags do not authenticate
-the remote publisher. Nothing here pushes, merges, deploys, or grants release
-authority. The OSV binary is not included in the Tredven release candidate.
+Manual existing-scanner mode remains available:
 
-See [the independent real public test](docs/R16_FIRST_REAL_VALUE_COMPETITIVE_GATE.md)
-and [the OSS product direction](docs/R17_OSS_PRODUCT_DIRECTION.md).
+```bash
+./bin/tredven-upstream review-local \
+  --repo "$PWD/fd-source" --from v10.4.2 --to v10.5.2 \
+  --osv-bin /absolute/path/to/verified/osv-scanner \
+  --osv-sha256 fb7dab19a8bd9bbe5c3189f09d4b7ee1820c9553a23bac202648a56efd2f6ee8 \
+  --allow-public-osv-network --format markdown
+```
+
+The example previously produced three resolved public advisories and decision
+**REVIEW**, not automatic approval. Live OSV findings can change; the scanner
+exit code 1 with findings denotes a completed, vulnerable scan, **not** success
+without findings. Use --format json for a machine report. Optional
+--evidence-dir /path/to/new-directory saves the exact raw evidence; never
+place private scan artifacts in a public repository by accident.
+
+**Trust boundary:** Git tags are local objects, not authenticated publisher
+releases. The hardcoded GitHub release digest pins exact OSV bytes; it does
+not establish an independent Sigstore verification. No Tredven service receives
+data, and no command applies updates, pushes, merges, deploys or authorizes
+release. The downloaded OSV executable is **not redistributed in the
+Tredven archive**. The Linux archive is still an unsigned local candidate,
+not an official published signed release.
+
+See [the independent public fd benchmark](docs/R16_FIRST_REAL_VALUE_COMPETITIVE_GATE.md),
+[OSS/paid direction](docs/R17_OSS_PRODUCT_DIRECTION.md), and
+[pinned OSV cache test evidence](docs/R18_PINNED_OSV_FIRST_USE.md).
 
 ## Run
 

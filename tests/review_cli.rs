@@ -455,3 +455,145 @@ fn r17_first_use_rejects_invalid_format_without_scan() {
     assert_eq!(out.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&out.stderr).contains("UNSUPPORTED_FORMAT"));
 }
+
+#[test]
+fn r18_pinned_install_never_implicitly_approves_public_network() {
+    let f = Fixture::new();
+    let out = Command::new(env!("CARGO_BIN_EXE_tredven-upstream"))
+        .args(["review-local", "--repo"])
+        .arg(&f.repo)
+        .args(["--from", "v0.1.0", "--to", "v0.2.0", "--install-pinned-osv"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&out.stderr)
+            .contains("OSV_PUBLIC_API_NETWORK_NOT_EXPLICITLY_APPROVED")
+    );
+}
+
+#[test]
+fn r18_pinned_install_rejects_manual_scanner_conflict_before_any_download() {
+    let f = Fixture::new();
+    let out = Command::new(env!("CARGO_BIN_EXE_tredven-upstream"))
+        .args(["review-local", "--repo"])
+        .arg(&f.repo)
+        .args([
+            "--from",
+            "v0.1.0",
+            "--to",
+            "v0.2.0",
+            "--install-pinned-osv",
+            "--osv-bin",
+            "/bin/true",
+            "--allow-public-osv-network",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&out.stderr)
+            .contains("PINNED_OSV_INSTALL_CONFLICTS_WITH_MANUAL_SCANNER")
+    );
+}
+
+#[test]
+fn r18_pinned_install_rejects_missing_tags_before_cache_or_network() {
+    let f = Fixture::new();
+    let fake_cache = f.dir.join("uncreated-xdg-cache");
+    let out = Command::new(env!("CARGO_BIN_EXE_tredven-upstream"))
+        .args(["review-local", "--repo"])
+        .arg(&f.repo)
+        .args([
+            "--from",
+            "v0.1.0",
+            "--to",
+            "missing-tag",
+            "--install-pinned-osv",
+            "--allow-public-osv-network",
+        ])
+        .env("XDG_CACHE_HOME", &fake_cache)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("LOCAL_GIT_COMMAND_FAILED_OR_UNVERIFIED_REF")
+    );
+    assert!(!fake_cache.exists());
+}
+
+#[test]
+fn r18_pinned_install_fails_closed_on_corrupt_cache_without_redownload() {
+    let f = Fixture::new();
+    let base = f.dir.join("xdg-cache");
+    let tools = base.join("tredven-upstream/tools");
+    fs::create_dir_all(&tools).unwrap();
+    fs::write(tools.join("osv-scanner-v2.7.1-linux-amd64"), b"not-osv").unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_tredven-upstream"))
+        .args(["review-local", "--repo"])
+        .arg(&f.repo)
+        .args([
+            "--from",
+            "v0.1.0",
+            "--to",
+            "v0.2.0",
+            "--install-pinned-osv",
+            "--allow-public-osv-network",
+        ])
+        .env("XDG_CACHE_HOME", &base)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("OSV_CACHE_BINARY_NOT_PINNED_REGULAR_FILE")
+    );
+    assert_eq!(
+        fs::read(tools.join("osv-scanner-v2.7.1-linux-amd64")).unwrap(),
+        b"not-osv"
+    );
+}
+
+#[test]
+fn r18_pinned_install_never_accepts_duplicate_opt_in() {
+    let out = Command::new(env!("CARGO_BIN_EXE_tredven-upstream"))
+        .args([
+            "review-local",
+            "--install-pinned-osv",
+            "--install-pinned-osv",
+            "--allow-public-osv-network",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("DUPLICATE_PINNED_OSV_INSTALL_OPT_IN"));
+}
+
+#[test]
+#[cfg(unix)]
+fn r18_pinned_install_rejects_symlinked_cache_base_without_download() {
+    let f = Fixture::new();
+    let real_cache = f.dir.join("real-cache");
+    fs::create_dir(&real_cache).unwrap();
+    let cache_alias = f.dir.join("cache-alias");
+    std::os::unix::fs::symlink(&real_cache, &cache_alias).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_tredven-upstream"))
+        .args(["review-local", "--repo"])
+        .arg(&f.repo)
+        .args([
+            "--from",
+            "v0.1.0",
+            "--to",
+            "v0.2.0",
+            "--install-pinned-osv",
+            "--allow-public-osv-network",
+        ])
+        .env("XDG_CACHE_HOME", &cache_alias)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&out.stderr)
+            .contains("OSV_CACHE_DIRECTORY_SYMLINK_OR_NOT_DIRECTORY")
+    );
+    assert!(fs::read_dir(real_cache).unwrap().next().is_none());
+}
