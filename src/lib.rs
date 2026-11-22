@@ -11,6 +11,7 @@ pub mod osv_bootstrap;
 pub mod plan;
 pub mod review;
 pub mod scanner;
+pub mod system_ci;
 pub mod system_upgrade;
 
 use serde::{Deserialize, Serialize};

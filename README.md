@@ -66,6 +66,22 @@ and PostgreSQL tools**; the distributed Tredven CLI and its policy/decision
 engine remain Rust. It is *not* the promised general system integration scanner
 or one-click live upgrader.
 
+### R29 — real FastAPI/Celery application integration and signed-CI claims (Draft-only)
+
+The local R29 vertical upgrades a **real public-source FastAPI + Celery worker
+application** from PostgreSQL 16 to 17, using a Redis broker in a disposable
+rootless test network. The API and worker successfully write new data on 17;
+restoring the frozen 16 volume **loses those post-cutover writes**. The Rust
+system gate correctly returns **BLOCKED** (7 of 8 checks pass, rollback fails).
+
+The R29 Rust verify-system-ci command checks exact workflow/commit/run
+identity and every raw system integration receipt SHA before delegating
+cryptographic provenance verification to the existing GitHub/Sigstore
+verifier. A **manual-only, owner-gated** hosted workflow is prepared, but
+has **not been run or signed**, and a locally fabricated workflow envelope
+is correctly rejected. There is **no live one-click upgrade**.
+See [R29 scope, actual evidence and missing hosted proof](docs/R29_REAL_APP_AND_SIGNED_CI_PROVENANCE.md).
+
 ## Start here: first-use dependency upgrade review (Rust program, any supported project ecosystem)
 
 **R26 development revision (not yet in the published v0.1.0-alpha.1 binary):**
