@@ -15,6 +15,7 @@
 - Fail closed: `BLOCKED` for failed checks and contradictory source claims, `REVIEW` for a declared version movement that needs human qualification, `UNKNOWN` for missing evidence.
 - Opt-in multi-project watch plans now combine local Git source changes with externally produced CI/security/backup/rollback evidence in one review report. **Caller-supplied check statuses are not independently verified.**
 - Native **Trivy JSON v2** and **OSV-Scanner v2 JSON** parsing, usable standalone (`inspect-scan`), inside watch plans, or with local Git from one command (`inspect-upgrade`). The CLI does not execute either scanner, authenticate the author or prove complete scan coverage.
+- R7 two-report comparison (`inspect-delta` and Git-tag-bound `inspect-upgrade-delta`), with separate delta and absolute-candidate decisions, strict scope match and no false green from missing scanners.
 - All patch/merge/deploy/send/provider-write/payment/release authority flags are **always false**.
 - Stable, input-bounded, portable source with no runtime network calls or background process.
 
@@ -138,6 +139,37 @@ cargo run --locked -- inspect-upgrade \
 This reads local Git tags and an existing scanner report, automatically computes the file SHA-256, verifies the stated commit matches the candidate tag, and composes a single watch-plan decision. **It cannot independently prove the scanner ran against that commit**. Local Git is not authenticated as an official remote release; `REVIEW` and CLI exit 0 **never** authorize an upgrade.
 
 The original multi-project `inspect-plan` now supports an optional `scan` object per evidence entry, with `status: "unknown"` (a manual `"passed"` is rejected). Supported formats are `trivy-json-v2` and `osv-scanner-json-v2`. A disabled, safe sample is [examples/watch-plan-native-scanner.example.json](examples/watch-plan-native-scanner.example.json). These are **purely synthetic examples**, not real CVEs or Tredven runtime results. Details and security limitations: [R6 native scanner evidence](docs/R6_NATIVE_SCANNER_EVIDENCE.md).
+
+## R7 — Compare baseline vs candidate scanner findings
+
+Keep the existing scanners. The **read-only Rust** CLI now compares two *already-produced* native Trivy or OSV-Scanner JSON reports. It counts newly introduced, resolved and persistent findings and severity escalations without equating "no new issues" with "safe to upgrade".
+
+```bash
+# Included synthetic fixture pair: the candidate introduces one critical finding.
+cargo run --locked -- inspect-delta \
+  --baseline fixtures/scanner/trivy-clean.json \
+  --candidate fixtures/scanner/trivy-critical.json \
+  --scanner trivy-json-v2 \
+  --subject 'example/app@sha256:synthetic-candidate' \
+  --format markdown
+# BLOCKED (exit 2); no scanner was executed.
+
+# Or inspect existing local Git tags + both scanner reports in one command:
+# Obtain real tag commits from local Git before copying them as explicit assertions.
+cargo run --locked -- inspect-upgrade-delta \
+  --repo /ABS/PATH/TO/YOUR/GIT/SOURCE \
+  --project example-app --from v1.0.0 --to v1.1.0 \
+  --baseline /ABS/PATH/TO/OLD/SCANNER.json \
+  --candidate /ABS/PATH/TO/NEW/SCANNER.json \
+  --scanner osv-scanner-json-v2 --subject Cargo.lock \
+  --baseline-commit REPLACE_WITH_40_HEX_BASE_TAG_COMMIT \
+  --candidate-commit REPLACE_WITH_40_HEX_CANDIDATE_TAG_COMMIT \
+  --format markdown
+```
+
+Both reports must describe the *same, structurally comparable scanner scope*. For Trivy, this includes the exact target, class/type, and reported scanner arrays. For OSV-Scanner, this includes the exact `source.path` and `source.type`. Empty/partial/mismatched reports return **UNKNOWN**, with delta counts shown as **null**, not zero. Finding IDs must be well-formed. High/critical, secret and OSV advisory findings in the candidate remain **BLOCKED even when they already existed in the baseline**; the separate delta describes what changed. The CLI emits at most 20 sample new findings (counts remain complete in bounded inputs); it never prints raw secret matches or full scanner descriptions. It does **not** compare package inventories or verify an actual scanner run.
+
+See [R7 decision, OSS alternatives and evidence limits](docs/R7_SCANNER_UPGRADE_DELTA.md). This is not a replacement for the existing [OSV-Scanner PR reporter](https://github.com/google/osv-scanner-action) or vulnerability triage platforms. No scanner execution, network calls, CI triggers, merge, release or deployment occur.
 
 ## How the prototype decides
 

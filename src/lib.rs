@@ -2,6 +2,7 @@
 //! This crate never connects to a host, invokes a shell, or grants release authority.
 
 pub mod contract;
+pub mod delta;
 pub mod git_source;
 pub mod plan;
 pub mod scanner;

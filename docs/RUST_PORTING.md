@@ -51,3 +51,7 @@ An opt-in, local-only multi-target watch plan now combines exact Git tag changes
 ## R6 native security scanner formats
 
 The Rust core now recognizes **Trivy JSON v2** and **OSV-Scanner v2 JSON** as local read-only evidence, in both `inspect-scan` and source-tag-bound `inspect-upgrade` plus multi-target `inspect-plan`. It conservatively interprets output and never runs the original scanner or claims an authenticated producer. This replaces manual PASS/FAIL normalization for those JSON cases, not the original native tools or whole private adapters. See [R6 development and proof](R6_NATIVE_SCANNER_EVIDENCE.md).
+
+## R7 source-aware scanner delta
+
+The independent Rust CLI now offers `inspect-delta` and `inspect-upgrade-delta`, comparing two Trivy/OSV-Scanner JSON artifacts while enforcing exact scan scope, stable finding identity, optional source-tag commit binding and a conservative *absolute candidate* verdict. It does not replace `osv-scanner-action` baseline reporting or scanner security databases. [Details, ROI counterfactual and test evidence](R7_SCANNER_UPGRADE_DELTA.md).

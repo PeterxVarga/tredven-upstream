@@ -30,6 +30,14 @@
 - Trivy findings with HIGH/CRITICAL severity or any detected secret are blocking; unrecognized severity, empty results and absent scan coverage are UNKNOWN. OSV advisory occurrences are blocked (no speculative severity conversion); empty/no-package reports are UNKNOWN. Those policies are **conservative heuristics**, not a comprehensive vulnerability triage decision.
 - Scanner files are max 8 MiB; regular files only, no final symlink, no raw secret content printed. Reports include aggregate finding counts and source paths from local Git. Treat private reports as sensitive. Input is untrusted JSON; no arbitrary commands, build scripts or code inside files are executed.
 
+## R7 baseline/candidate delta — a comparison, not proof of a safe upgrade
+
+- `inspect-delta` reads **two existing**, bounded, non-symlink scanner JSON report files; `inspect-upgrade-delta` additionally reads only named local Git tags and compares **caller-asserted** baseline/candidate SHA-1 commit declarations against those local Git objects. These declarations do not cryptographically attest that the scanner ran on the particular commit, that its database was fresh, or that the remote Git publisher is genuine.
+- Vulnerability identity uses exact category, source/scanner target, package and advisory ID; Trivy different `Target`, `Class`, `Type` or scanner-array coverage are **not** considered comparable. OSV source path/type changes are likewise not comparable. Missing scans, malformed IDs and changed source coverage produce **UNKNOWN** and null delta counts (rather than invented zero improvement).
+- The delta and the **absolute** candidate verdict are separate. A persisting critical/high vulnerability, secret or OSV advisory still makes the final result **BLOCKED**, even when the delta contains no new findings. A new medium/low finding remains visible and REVIEW-only, never an approval. Severe escalation is also a delta blocker.
+- Scanner JSON files can contain real secrets, credentials and internal path names. The program never sends scanner files over the network, runs the scanner or prints finding descriptions/secret match bytes, and limits examples to 20 sanitized IDs. It can expose package/advisory names and local Git paths: **do not publicly share private reports**.
+- A scanner's own suppressed or incomplete findings, stale vulnerability database, changed scan flags, hidden aliases and lack of independent signed attestation are **not** solved by the diff. Use the original vendor tools for actual vulnerability analysis and production policy.
+
 ## Report vulnerabilities
 
 Use GitHub's private vulnerability reporting if enabled, or contact the project maintainers through the repository's security reporting channel. Do not publicly post exploit payloads with real user data.

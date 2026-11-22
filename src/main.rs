@@ -19,6 +19,8 @@ fn usage() -> &'static str {
      Usage: tredven-upstream inspect-plan --manifest FILE [--format json|markdown]\n\
      Usage: tredven-upstream inspect-scan --input FILE --scanner trivy-json-v2|osv-scanner-json-v2 --subject TARGET [--format json|markdown]\n\
      Usage: tredven-upstream inspect-upgrade --repo DIR --project ID --from TAG --to TAG --scanner trivy-json-v2|osv-scanner-json-v2 --scan-report FILE --subject TARGET --scan-commit SHA [--format json|markdown]\n\
+     Usage: tredven-upstream inspect-delta --baseline FILE --candidate FILE --scanner trivy-json-v2|osv-scanner-json-v2 --subject TARGET [--format json|markdown]\n\
+     Usage: tredven-upstream inspect-upgrade-delta --repo DIR --project ID --from TAG --to TAG --baseline FILE --candidate FILE --scanner trivy-json-v2|osv-scanner-json-v2 --subject TARGET --baseline-commit SHA --candidate-commit SHA [--format json|markdown]\n\
      Git inspection is local only, never a remote release or production attestation.\n\
      No network, Docker, provider credentials, mutations or deploy permissions.\n"
 }
@@ -360,6 +362,177 @@ fn run_upgrade(mut args: impl Iterator<Item = String>) -> Result<u8, String> {
     emit_watch_report(&report, &format)
 }
 
+fn bounded_scan_file(path: &str) -> Result<Vec<u8>, String> {
+    let path = Path::new(path);
+    let metadata = fs::symlink_metadata(path).map_err(|_| "SCANNER_REPORT_NOT_FOUND")?;
+    if !metadata.file_type().is_file() || metadata.len() > 8 * 1024 * 1024 {
+        return Err("SCANNER_REPORT_MUST_BE_BOUNDED_REGULAR_FILE".into());
+    }
+    let bytes = fs::read(path).map_err(|_| "SCANNER_REPORT_READ_FAILED")?;
+    if bytes.len() > 8 * 1024 * 1024 {
+        return Err("SCANNER_REPORT_TOO_LARGE".into());
+    }
+    Ok(bytes)
+}
+
+fn delta_exit(decision: tredven_upstream::delta::DeltaDecision) -> u8 {
+    use tredven_upstream::delta::DeltaDecision;
+    match decision {
+        DeltaDecision::Blocked => 2,
+        DeltaDecision::Unknown => 3,
+        DeltaDecision::Review => 0,
+    }
+}
+
+fn run_delta(mut args: impl Iterator<Item = String>, with_git: bool) -> Result<u8, String> {
+    use tredven_upstream::delta::{DeltaDecision, compare_reports};
+    use tredven_upstream::scanner::{ScannerFormat, valid_subject};
+    let (mut baseline, mut candidate, mut scanner, mut subject) = (None, None, None, None);
+    let (mut repo, mut project, mut from, mut to, mut baseline_commit, mut candidate_commit) =
+        (None, None, None, None, None, None);
+    let mut format = "json".to_owned();
+    let mut format_seen = false;
+    while let Some(key) = args.next() {
+        if ["--help", "-h"].contains(&key.as_str()) {
+            print!("{}", usage());
+            return Ok(0);
+        }
+        let value = args.next().ok_or("MISSING_DELTA_OPTION_VALUE")?;
+        let place = match key.as_str() {
+            "--baseline" => &mut baseline,
+            "--candidate" => &mut candidate,
+            "--scanner" => &mut scanner,
+            "--subject" => &mut subject,
+            "--repo" if with_git => &mut repo,
+            "--project" if with_git => &mut project,
+            "--from" if with_git => &mut from,
+            "--to" if with_git => &mut to,
+            "--baseline-commit" if with_git => &mut baseline_commit,
+            "--candidate-commit" if with_git => &mut candidate_commit,
+            "--format" => {
+                if format_seen {
+                    return Err("DUPLICATE_DELTA_FORMAT".into());
+                }
+                format_seen = true;
+                format = value;
+                continue;
+            }
+            _ => return Err("UNRECOGNIZED_DELTA_OPTION".into()),
+        };
+        if place.replace(value).is_some() {
+            return Err("DUPLICATE_DELTA_OPTION".into());
+        }
+    }
+    if !["json", "markdown"].contains(&format.as_str()) {
+        return Err("UNSUPPORTED_FORMAT".into());
+    }
+    let subject = subject.ok_or("MISSING_DELTA_SUBJECT")?;
+    if !valid_subject(&subject) {
+        return Err("INVALID_DELTA_SUBJECT".into());
+    }
+    let scanner = match scanner.ok_or("MISSING_DELTA_SCANNER")?.as_str() {
+        "trivy-json-v2" => ScannerFormat::TrivyJsonV2,
+        "osv-scanner-json-v2" => ScannerFormat::OsvScannerJsonV2,
+        _ => return Err("UNSUPPORTED_SCANNER_FORMAT".into()),
+    };
+    let before = bounded_scan_file(&baseline.ok_or("MISSING_DELTA_BASELINE_FILE")?)?;
+    let after = bounded_scan_file(&candidate.ok_or("MISSING_DELTA_CANDIDATE_FILE")?)?;
+    let delta = compare_reports(&before, &after, scanner, &subject);
+    let mut stdout = io::stdout().lock();
+    if !with_git {
+        if format == "json" {
+            serde_json::to_writer_pretty(&mut stdout, &delta)
+                .map_err(|_| "DELTA_JSON_WRITE_FAILED")?;
+            writeln!(&mut stdout).map_err(|_| "DELTA_STDOUT_WRITE_FAILED")?;
+        } else {
+            write!(&mut stdout, "{}", delta.to_markdown())
+                .map_err(|_| "DELTA_MARKDOWN_WRITE_FAILED")?;
+        }
+        return Ok(delta_exit(delta.overall_decision));
+    }
+    use serde::Serialize;
+    use tredven_upstream::Decision;
+    #[derive(Serialize)]
+    struct UpgradeDeltaEnvelope {
+        schema: &'static str,
+        source: tredven_upstream::PreflightReport,
+        scanner_delta: tredven_upstream::delta::ScanDeltaReport,
+        baseline_commit_binding: bool,
+        candidate_commit_binding: bool,
+        decision: DeltaDecision,
+        reason: &'static str,
+        scanner_execution_attested: bool,
+        production_ready: bool,
+        action_authorized: bool,
+        performed_remote_queries: bool,
+        performed_mutations: bool,
+    }
+    let source = inspect_local_git(
+        Path::new(&repo.ok_or("MISSING_DELTA_GIT_REPO")?),
+        &project.ok_or("MISSING_DELTA_PROJECT")?,
+        &from.ok_or("MISSING_DELTA_FROM_TAG")?,
+        &to.ok_or("MISSING_DELTA_TO_TAG")?,
+    )?;
+    let bound_base = baseline_commit.ok_or("MISSING_DELTA_BASELINE_COMMIT")?;
+    let bound_cand = candidate_commit.ok_or("MISSING_DELTA_CANDIDATE_COMMIT")?;
+    let format_sha = |s: &str| s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit());
+    if !format_sha(&bound_base) || !format_sha(&bound_cand) {
+        return Err("INVALID_DELTA_COMMIT_PIN".into());
+    }
+    let baseline_bound = source
+        .baseline_commit
+        .as_ref()
+        .is_some_and(|x| x.eq_ignore_ascii_case(&bound_base));
+    let candidate_bound = source
+        .candidate_commit
+        .as_ref()
+        .is_some_and(|x| x.eq_ignore_ascii_case(&bound_cand));
+    let decision = if !baseline_bound || !candidate_bound || source.decision == Decision::Blocked {
+        DeltaDecision::Blocked
+    } else if source.decision == Decision::Unknown
+        || delta.overall_decision == DeltaDecision::Unknown
+    {
+        DeltaDecision::Unknown
+    } else {
+        delta.overall_decision
+    };
+    let reason = if !baseline_bound || !candidate_bound {
+        "SCANNER_SOURCE_COMMIT_DECLARATION_MISMATCH"
+    } else if source.decision == Decision::Blocked {
+        "LOCAL_SOURCE_INSPECTION_BLOCKED"
+    } else if source.decision == Decision::Unknown {
+        "LOCAL_SOURCE_INSPECTION_UNKNOWN"
+    } else {
+        "SCANNER_DELTA_AND_LOCAL_SOURCE_COMPOSED_NO_AUTHORITY"
+    };
+    let envelope = UpgradeDeltaEnvelope {
+        schema: "tredven.upstream.source-scan-delta.v1",
+        source,
+        scanner_delta: delta,
+        baseline_commit_binding: baseline_bound,
+        candidate_commit_binding: candidate_bound,
+        decision,
+        reason,
+        scanner_execution_attested: false,
+        production_ready: false,
+        action_authorized: false,
+        performed_remote_queries: false,
+        performed_mutations: false,
+    };
+    if format == "json" {
+        serde_json::to_writer_pretty(&mut stdout, &envelope)
+            .map_err(|_| "DELTA_JSON_WRITE_FAILED")?;
+        writeln!(&mut stdout).map_err(|_| "DELTA_STDOUT_WRITE_FAILED")?;
+    } else {
+        write!(&mut stdout,"# Source-pinned local upgrade risk delta\n\nSource: {} to {}\nLocal changed paths: {}\nBaseline declared SHA matches: {}\nCandidate declared SHA matches: {}\nFinal: {:?} ({})\n\n{}",
+            envelope.source.baseline_tag,envelope.source.candidate_tag,
+            envelope.source.changed_paths_considered,baseline_bound,candidate_bound,
+            decision,reason,envelope.scanner_delta.to_markdown())
+            .map_err(|_|"DELTA_MARKDOWN_WRITE_FAILED")?;
+    }
+    Ok(delta_exit(decision))
+}
+
 fn run() -> Result<u8, String> {
     let mut args = env::args().skip(1);
     match args.next().as_deref() {
@@ -372,6 +545,8 @@ fn run() -> Result<u8, String> {
         Some("inspect-plan") => return run_plan(args),
         Some("inspect-scan") => return run_scan(args),
         Some("inspect-upgrade") => return run_upgrade(args),
+        Some("inspect-delta") => return run_delta(args, false),
+        Some("inspect-upgrade-delta") => return run_delta(args, true),
         Some("inspect-contract") => return run_contract(args),
         _ => return Err(usage().trim_end().into()),
     };
