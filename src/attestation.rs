@@ -124,6 +124,14 @@ impl Report {
     }
 }
 
+/// Produce a policy failure without invoking the cryptographic verifier.
+/// Used when source tag or commit declarations contradict observed Git tags.
+pub fn reject_policy(policy: &Policy, reason: &'static str) -> Report {
+    let mut result = Report::empty(policy);
+    result.reason = reason;
+    result
+}
+
 fn is_component(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 100
@@ -254,6 +262,52 @@ fn verified_fields_match(output: &[u8], p: &Policy, digest: &str, filename: &str
     false
 }
 
+/// Require a GH CLI version with fixed attestation signer/ref policy bugs.
+/// We trust the owner-installed executable itself; a version string alone is
+/// not a binary signature. 2.102.0 fixes GHSA-wjmr-j3rp-mh2g and
+/// GHSA-4mq3-hpgx-9cx8 (older versions can misapply trust restrictions).
+fn supported_gh_version(stdout: &[u8]) -> bool {
+    if stdout.len() > 2048 {
+        return false;
+    }
+    let Ok(s) = std::str::from_utf8(stdout) else {
+        return false;
+    };
+    let Some(first) = s.lines().next() else {
+        return false;
+    };
+    let Some(version) = first
+        .strip_prefix("gh version ")
+        .and_then(|rest| rest.split(' ').next())
+    else {
+        return false;
+    };
+    let mut parts = version.split('.');
+    let (Some(major), Some(minor), Some(patch), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return false;
+    };
+    let parse = |s: &str| -> Option<u32> {
+        if s.is_empty() || s.len() > 5 || !s.bytes().all(|b| b.is_ascii_digit()) {
+            None
+        } else {
+            s.parse().ok()
+        }
+    };
+    let (Some(maj), Some(min), Some(_patch)) = (parse(major), parse(minor), parse(patch)) else {
+        return false;
+    };
+    maj > 2 || (maj == 2 && min >= 102)
+}
+
+fn qualified_gh_version() -> bool {
+    let Ok(output) = Command::new("gh").arg("version").output() else {
+        return false;
+    };
+    output.status.success() && supported_gh_version(&output.stdout)
+}
+
 pub fn verify_artifact(path: &Path, policy: &Policy) -> Report {
     let mut report = Report::empty(policy);
     if let Err(reason) = verify_policy(policy) {
@@ -300,6 +354,13 @@ pub fn verify_artifact(path: &Path, policy: &Policy) -> Report {
                 }
             }
         }
+    }
+    // R10: an outdated GH binary MUST NOT grant a signed verification.
+    // GH <2.102.0 has known source-ref/workflow policy bypasses. This gate
+    // precedes any gh attestation verify invocation, including offline.
+    if !qualified_gh_version() {
+        report.reason = "GH_ATTESTATION_VERIFIER_VERSION_NOT_QUALIFIED";
+        return report;
     }
     // All gh arguments are fixed tokens or validated data. No shell, script,
     // image execution or root-privileged commands. Only *gh* does signature
@@ -410,6 +471,28 @@ mod tests {
             bundle: None,
             trusted_root: None,
             online: true,
+        }
+    }
+    #[test]
+    fn gh_policy_verifier_version_gate_rejects_known_vulnerable_releases() {
+        for version in [
+            "gh version 2.97.0 (2026-07-31)\n",
+            "gh version 2.101.99\n",
+            "gh version 2.102.0-rc1\n",
+            "gh version 2.102\n",
+            "gh version unknown\n",
+            "gh version 1.999.0\n",
+            "gh version 2.10.5\n",
+            "gh version 2.105.0junk\n",
+        ] {
+            assert!(!supported_gh_version(version.as_bytes()), "{version}");
+        }
+        for version in [
+            "gh version 2.102.0 (2026-09-30)\n",
+            "gh version 2.105.0 (2026-11-17)\n",
+            "gh version 3.0.0\n",
+        ] {
+            assert!(supported_gh_version(version.as_bytes()), "{version}");
         }
     }
     #[test]

@@ -1,4 +1,4 @@
-//! Upgrade evidence evaluation with explicit, read-only GitHub CLI attestation verification.
+//! Upgrade evidence evaluation with delegated GitHub verification and explicit opt-in local OSV scans.
 //! Most modules are local-only. The explicit attestation module delegates signed provenance verification to the official GitHub CLI; it never grants release authority.
 
 pub mod attestation;
@@ -6,6 +6,7 @@ pub mod contract;
 pub mod delta;
 pub mod git_source;
 pub mod plan;
+pub mod review;
 pub mod scanner;
 
 use serde::{Deserialize, Serialize};

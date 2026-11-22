@@ -1,0 +1,14 @@
+{
+  "schema": "tredven.upstream.upgrade-review.v1",
+  "project": "example-app",
+  "repo": "/ABS/PATH/TO/LOCAL/GIT/SOURCE",
+  "baseline_tag": "v1.0.0",
+  "candidate_tag": "v1.1.0",
+  "scan": {
+    "mode": "existing-reports",
+    "format": "osv-scanner-json-v2",
+    "subject": "Cargo.lock",
+    "baseline": "/ABS/PATH/TO/OLD/OSV.json",
+    "candidate": "/ABS/PATH/TO/NEW/OSV.json"
+  }
+}

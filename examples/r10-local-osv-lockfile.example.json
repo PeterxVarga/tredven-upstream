@@ -1,0 +1,14 @@
+{
+  "schema": "tredven.upstream.upgrade-review.v1",
+  "project": "public-example",
+  "repo": "/ABS/PATH/TO/CLONED/PUBLIC/GIT/SOURCE",
+  "baseline_tag": "v1.0.0",
+  "candidate_tag": "v1.1.0",
+  "scan": {
+    "mode": "local-osv-lockfile",
+    "lockfile": "Cargo.lock",
+    "binary": "/ABS/PATH/TO/TRUSTED/OSV-SCANNER-V2.7.1",
+    "binary_sha256": "fb7dab19a8bd9bbe5c3189f09d4b7ee1820c9553a23bac202648a56efd2f6ee8",
+    "allow_public_osv_network": false
+  }
+}

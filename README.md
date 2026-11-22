@@ -209,6 +209,28 @@ cargo run --locked -- inspect-attested-scan \
 
 Offline mode requires an existing local attestation **bundle** and trusted root from a separately authenticated source, and never silently falls back to online. `--online` explicitly permits read-only GitHub API lookups. An offline custom root is caller-supplied; its matching hash alone does not establish trust. All output retains `production_ready: false`, `release_authorized: false` and `scanner_execution_verified: false`. See [R9 real signed verification, reproducible fixture, security policy and falsification](docs/R9_REAL_GITHUB_ATTESTATION.md).
 
+## R10 — One-command verified upgrade review (local Git → OSS scanner → evidence → verdict)
+
+The CLI now provides **review-upgrade**, a single read-only-to-source workflow which combines Git tag comparison, either native Trivy/OSV report interpretation or **two observed OSV-Scanner runs**, security delta, optional GitHub-signed artifact policy, and one conservative BLOCKED / UNKNOWN / REVIEW decision. It can explicitly save an owner-private, checksummed evidence bundle. **REVIEW is never a deployment permission.**
+
+```bash
+# Safe default: use existing scanner report JSON; no network or scanner execution.
+# Copy and edit examples/r10-existing-reports.example.json first:
+cargo run --locked -- review-upgrade --config /path/to/review.json --format markdown
+
+# For a separately trusted OSV-Scanner on a PUBLIC Git source, copy/edit:
+# examples/r10-local-osv-lockfile.example.json
+# It intentionally has allow_public_osv_network=false. Explicitly opt in
+# ONLY when sending public dependency metadata to the OSV API is acceptable.
+cargo run --locked -- review-upgrade \
+  --config /path/to/public-review.json \
+  --evidence-dir /path/to/NEW-private-receipts --format markdown
+```
+
+**Actual, non-synthetic E2E evidence (public third-party only):** OSV-Scanner v2.7.1 scanned the baseline and candidate Cargo.lock files from a public Rust-template repo: 81 vs 97 packages, the **same RUSTSEC-2026-0486 vulnerability** on both, hence 0 new and 1 persistent advisory. R10 correctly returns **BLOCKED**, not a false approval. The two actual scanner outputs and both lockfiles were saved with SHA256SUMS and checked in an ignored, private local folder. A GitHub-signed **binary** was separately verified, but intentionally returned UNKNOWN when treated as scanner JSON.
+
+The GitHub attestation verifier now **rejects gh older than 2.102.0** (patched signer/source-policy security advisories). An owner-isolated gh 2.105.0 verified the genuine signed public sample, without changing the system-installed gh. No private Tredven environment was scanned, no GitHub Action launched, and no releases or merges occurred. The signed **scanner-execution provenance** remains unproven, so this is an upgrade-review MVP, not production-safe upgrade automation. Details and reproduction: [R10 verification and open limitations](docs/R10_VERIFIED_UPGRADE_REVIEW_MVP.md).
+
 ## How the prototype decides
 
 | Input evidence | Decision | What it means |

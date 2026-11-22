@@ -59,3 +59,7 @@ The independent Rust CLI now offers `inspect-delta` and `inspect-upgrade-delta`,
 ## R9 delegated signed artifact provenance
 
 The Rust CLI now accepts a strict, reusable owner-maintained GitHub attestation identity policy and delegates *all* cryptographic verification to installed official `gh`. Signed provenance is checked offline with bundle/root by default, or using explicit online public read-only GitHub lookups. An independent **real signed release binary** was verified; no signed scanner JSON has yet been tested. See [R9 proof and trust limitations](R9_REAL_GITHUB_ATTESTATION.md).
+
+## R10 one-command source/OSV evidence review
+
+The Rust core now combines local Git tag inspection, two exact lockfile scanner runs (or imported Trivy/OSV reports), optional delegated GitHub signed-file provenance, strict fail-closed version policy, and an optional checksummed local evidence receipt. The verified public-source E2E found a persistent advisory and returned BLOCKED. See [R10 report](R10_VERIFIED_UPGRADE_REVIEW_MVP.md). Scanner-run cryptographic attestation and production authorization are still NOT PROVEN.

@@ -214,12 +214,19 @@ fn osv(value: &Value, subject: &str, report: &mut ScanSummary) {
             if !meta.is_some_and(|p| nonempty_string(p, "name") && nonempty_string(p, "version")) {
                 malformed = true;
             }
-            let Some(vulns) = array_at(package, "vulnerabilities") else {
-                malformed = true;
-                continue;
+            // OSV-Scanner v2 with --all-packages omits the field on
+            // clean packages. Absent means no *reported* vulnerabilities,
+            // not independently proven scanner execution or coverage.
+            let vulns = match package.get("vulnerabilities") {
+                None => None,
+                Some(Value::Array(items)) => Some(items),
+                Some(_) => {
+                    malformed = true;
+                    continue;
+                }
             };
             parsed_packages += 1;
-            for vuln in vulns {
+            for vuln in vulns.into_iter().flatten() {
                 report.vulnerability_occurrences += 1;
                 if !nonempty_string(vuln, "id") {
                     malformed = true;
@@ -375,6 +382,15 @@ mod tests {
         let r = inspect_scanner(raw, ScannerFormat::OsvScannerJsonV2, "Cargo.lock");
         assert_eq!(r.decision, ScanDecision::Blocked);
         assert_eq!(r.vulnerability_occurrences, 1);
+    }
+    #[test]
+    fn osv_v2_all_packages_clean_entries_omit_vulnerability_array() {
+        let raw=br#"{"results":[{"source":{"path":"Cargo.lock","type":"lockfile"},"packages":[{"package":{"name":"a","version":"1","ecosystem":"crates.io"}}]}]}"#;
+        let r = inspect_scanner(raw, ScannerFormat::OsvScannerJsonV2, "Cargo.lock");
+        assert_eq!(r.decision, ScanDecision::Review);
+        assert_eq!(r.vulnerability_occurrences, 0);
+        assert!(!r.scanner_execution_attested);
+        assert!(!r.production_ready);
     }
     #[test]
     fn osv_clean_package_is_review_only() {

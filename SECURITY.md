@@ -54,6 +54,15 @@
 - The dedicated scanner composition `inspect-attested-scan` first requires verified artifact origin, then validates the scanner report bytes against the verified artifact SHA-256 before parsing. Even a truly signed Trivy/OSV JSON **does not prove its actual scanner execution or complete coverage**; a clean report remains REVIEW only. The public tested fixture is a signed **binary**, so its scanner result is UNKNOWN.
 - The R8 local release candidate is **not signed** by this change. No GitHub Actions CI, GitHub Release, crates.io publication, deployment, production data or privileged self-hosted runner is authorized.
 
+## R10 local scan and signed-review trust boundaries
+
+- **Default read-only:** review-upgrade can consume two existing bounded JSON files with no tool execution, Git network fetch or provider mutation. Without independently signed artifact evidence, a clean imported report remains UNKNOWN, not proof of scanner execution.
+- **Executable OSV is explicit:** local-osv-lockfile intentionally invokes an owner-selected, SHA-256-pinned external OSV executable twice, against isolated Cargo.lock bytes extracted from exact local Git commits. Executable SHA-256 equality does NOT independently authenticate its publisher. The external executable is part of the trust boundary. It is invoked without inherited HOME/credentials, source hooks, Cargo runs or call analysis.
+- **Public dependency metadata:** allow_public_osv_network must be set true explicitly. A public OSV API request can expose dependency names/versions. Do not scan private customer/source lockfiles until separately authorized. A local scanner process can have side effects beyond the Rust process's own controlled actions; do not run an untrusted external binary.
+- **GH security gate:** known GitHub CLI attestation signer-workflow/source-ref vulnerabilities are fixed in gh 2.102.0. R10 refuses older, missing or malformed gh version output before any attestation verification. An exact signed file origin is not proof that a scanner ran or that its source DB is fresh.
+- **No false green:** a persistent critical/advisory finding stays BLOCKED even with zero new findings; unknown/missing scanner source coverage is UNKNOWN, not zero. Signature and source commit mismatches are BLOCKED. The release, production and action authorization flags remain false.
+- **Owner-private receipts:** only --evidence-dir writes the two raw reports and optional original Cargo.lock snapshots. Creates a new no-overwrite 0700 directory and 0600 files, SHA256SUMS integrity, not a signature. These files may reveal package names and original scanner paths; do not publish private scan outputs.
+
 ## Report vulnerabilities
 
 Use GitHub's private vulnerability reporting if enabled, or contact the project maintainers through the repository's security reporting channel. Do not publicly post exploit payloads with real user data.

@@ -21,6 +21,7 @@ fn usage() -> &'static str {
      Usage: tredven-upstream inspect-upgrade --repo DIR --project ID --from TAG --to TAG --scanner trivy-json-v2|osv-scanner-json-v2 --scan-report FILE --subject TARGET --scan-commit SHA [--format json|markdown]\n\
      Usage: tredven-upstream inspect-delta --baseline FILE --candidate FILE --scanner trivy-json-v2|osv-scanner-json-v2 --subject TARGET [--format json|markdown]\n\
      Usage: tredven-upstream inspect-upgrade-delta --repo DIR --project ID --from TAG --to TAG --baseline FILE --candidate FILE --scanner trivy-json-v2|osv-scanner-json-v2 --subject TARGET --baseline-commit SHA --candidate-commit SHA [--format json|markdown]\n\
+     Usage: tredven-upstream review-upgrade --config FILE [--format json|markdown] [--evidence-dir NEW_DIRECTORY]\n\
      Usage: tredven-upstream verify-attestation --artifact FILE --repo OWNER/REPO --repo-id NUM --signer-workflow OWNER/REPO/.github/workflows/NAME.yml --source-ref refs/tags/TAG --source-commit SHA --bundle FILE --trusted-root FILE [--predicate-type URL] [--format json|markdown]\n\
      Shortcut: tredven-upstream verify-attestation --artifact FILE --policy POLICY.json [--format json|markdown]\n\
      Usage: tredven-upstream inspect-attested-scan --artifact REPORT.json --scanner trivy-json-v2|osv-scanner-json-v2 --subject TARGET --repo OWNER/REPO --repo-id NUM --signer-workflow OWNER/REPO/.github/workflows/NAME.yml --source-ref refs/tags/TAG --source-commit SHA --bundle FILE --trusted-root FILE [--format json|markdown]\n\
@@ -747,6 +748,69 @@ fn run_attestation(mut args: impl Iterator<Item = String>, scan_mode: bool) -> R
     })
 }
 
+fn run_review(mut args: impl Iterator<Item = String>) -> Result<u8, String> {
+    let mut path = None;
+    let mut evidence_dir = None;
+    let mut format = "json".to_owned();
+    let mut seen_format = false;
+    while let Some(arg) = args.next() {
+        if ["--help", "-h"].contains(&arg.as_str()) {
+            print!("{}", usage());
+            return Ok(0);
+        }
+        let value = args.next().ok_or("MISSING_REVIEW_OPTION_VALUE")?;
+        match arg.as_str() {
+            "--evidence-dir" => {
+                if evidence_dir.replace(value).is_some() {
+                    return Err("DUPLICATE_EVIDENCE_DIR".into());
+                }
+            }
+            "--config" => {
+                if path.replace(value).is_some() {
+                    return Err("DUPLICATE_REVIEW_CONFIG".into());
+                }
+            }
+            "--format" => {
+                if seen_format {
+                    return Err("DUPLICATE_REVIEW_FORMAT".into());
+                }
+                seen_format = true;
+                format = value;
+            }
+            _ => return Err("UNRECOGNIZED_REVIEW_OPTION".into()),
+        }
+    }
+    if !["json", "markdown"].contains(&format.as_str()) {
+        return Err("UNSUPPORTED_FORMAT".into());
+    }
+    let path = path.ok_or("MISSING_REVIEW_CONFIG")?;
+    let path = Path::new(&path);
+    let metadata = fs::symlink_metadata(path).map_err(|_| "REVIEW_CONFIG_FILE_MISSING")?;
+    if !metadata.file_type().is_file() || metadata.len() == 0 || metadata.len() > 128 * 1024 {
+        return Err("REVIEW_CONFIG_NOT_BOUNDED_REGULAR_FILE".into());
+    }
+    let bytes = fs::read(path).map_err(|_| "REVIEW_CONFIG_FILE_UNREADABLE")?;
+    let base = path.parent().unwrap_or(Path::new("."));
+    let request = tredven_upstream::review::parse_config(&bytes, base)?;
+    let outcome = tredven_upstream::review::review(request)?;
+    if let Some(path) = evidence_dir {
+        outcome.save_evidence(Path::new(&path))?;
+    }
+    let report = &outcome.report;
+    let mut out = io::stdout().lock();
+    if format == "json" {
+        serde_json::to_writer_pretty(&mut out, &report).map_err(|_| "REVIEW_JSON_WRITE_FAILED")?;
+        writeln!(&mut out).map_err(|_| "STDOUT_WRITE_FAILED")?;
+    } else {
+        write!(&mut out, "{}", report.markdown()).map_err(|_| "REVIEW_MARKDOWN_WRITE_FAILED")?;
+    }
+    Ok(match report.decision {
+        "BLOCKED" => 2,
+        "UNKNOWN" => 3,
+        _ => 0,
+    })
+}
+
 fn run() -> Result<u8, String> {
     let mut args = env::args().skip(1);
     match args.next().as_deref() {
@@ -761,6 +825,7 @@ fn run() -> Result<u8, String> {
         Some("inspect-upgrade") => return run_upgrade(args),
         Some("inspect-delta") => return run_delta(args, false),
         Some("inspect-upgrade-delta") => return run_delta(args, true),
+        Some("review-upgrade") => return run_review(args),
         Some("verify-attestation") => return run_attestation(args, false),
         Some("inspect-attested-scan") => return run_attestation(args, true),
         Some("inspect-contract") => return run_contract(args),

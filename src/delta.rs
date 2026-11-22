@@ -240,11 +240,15 @@ fn parse_entries(raw: &[u8], format: ScannerFormat) -> Result<ScanEntries, &'sta
                     let name = clean_id(meta, "name")?;
                     let _version = clean_id(meta, "version")?;
                     let ecosystem = clean_id(meta, "ecosystem")?;
-                    let vulnerabilities = p
-                        .get("vulnerabilities")
-                        .and_then(Value::as_array)
-                        .ok_or("OSV_VULNERABILITIES_UNQUALIFIED")?;
-                    for vuln in vulnerabilities {
+                    // Native OSV --all-packages omits vulnerabilities
+                    // altogether for clean packages. Keep malformed nonarray
+                    // values invalid; an absent array is just zero reported.
+                    let vulnerabilities = match p.get("vulnerabilities") {
+                        None => None,
+                        Some(Value::Array(v)) => Some(v),
+                        Some(_) => return Err("OSV_VULNERABILITIES_NOT_ARRAY"),
+                    };
+                    for vuln in vulnerabilities.into_iter().flatten() {
                         insert(
                             &mut out,
                             "advisory",
@@ -619,6 +623,21 @@ mod tests {
         assert_eq!(r.new_blocking_occurrences, Some(31));
         assert_eq!(r.new_sample.len(), 20);
         assert!(r.findings_sample_truncated);
+    }
+    #[test]
+    fn osv_all_packages_native_missing_vulnerability_fields_are_comparable() {
+        let baseline=br#"{"results":[{"source":{"path":"Cargo.lock","type":"lockfile"},"packages":[{"package":{"name":"safe","version":"1","ecosystem":"crates.io"}},{"package":{"name":"bad","version":"1","ecosystem":"crates.io"},"vulnerabilities":[{"id":"RUSTSEC-TEST"}]}]}]}"#;
+        let candidate=br#"{"results":[{"source":{"path":"Cargo.lock","type":"lockfile"},"packages":[{"package":{"name":"safe","version":"2","ecosystem":"crates.io"}},{"package":{"name":"bad","version":"1","ecosystem":"crates.io"},"vulnerabilities":[{"id":"RUSTSEC-TEST"}]}]}]}"#;
+        let report = compare_reports(
+            baseline,
+            candidate,
+            ScannerFormat::OsvScannerJsonV2,
+            "Cargo.lock",
+        );
+        assert_eq!(report.new_occurrences, Some(0));
+        assert_eq!(report.persistent_occurrences, Some(1));
+        assert_eq!(report.delta_decision, DeltaDecision::Review);
+        assert_eq!(report.overall_decision, DeltaDecision::Blocked);
     }
     #[test]
     fn osv_existing_advisory_is_not_falsely_approved() {
