@@ -29,15 +29,19 @@ is required. You need a local Git clone containing two release tags and root
 Cargo.lock files, and a separately installed, SHA-256 verified OSV-Scanner v2
 executable. The CLI itself neither clones source nor downloads scanner binaries.
 
+Extract a locally checksummed release-candidate archive and run the
+extracted bin/tredven-upstream executable from that directory (or build
+from source with Cargo). The local archive is **unsigned and unpublished**.
+
 The example uses the real public sharkdp/fd repository and the official
 **Linux amd64 OSV-Scanner v2.7.1** executable. Do not use this exact checksum
 with other OSV versions or platforms.
 
 ```bash
-git clone --no-checkout --filter=blob:none https://github.com/sharkdp/fd.git fd-source
+git clone --no-checkout https://github.com/sharkdp/fd.git fd-source
 git -C fd-source fetch --tags
 
-./tredven-upstream review-local \
+./bin/tredven-upstream review-local \
   --repo "$PWD/fd-source" \
   --from v10.4.2 --to v10.5.2 \
   --osv-bin /absolute/path/to/verified/osv-scanner \
