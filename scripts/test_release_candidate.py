@@ -228,6 +228,19 @@ class LicenseAnnexTests(unittest.TestCase):
         self.assertIn("Registry packages: 1",text)
         self.assertIn(m.sha((self.repo/"Cargo.lock").read_bytes()),text)
 
+    def test_recognizes_upstream_license_filename_with_spdx_identifier_first(self):
+        # yaml-rust2 publishes Apache-LICENSE / MIT-LICENSE, not LICENSE-...
+        (self.crate/"LICENSE-MIT").unlink()
+        (self.crate/"LICENSE-UNICODE").unlink()
+        (self.crate/"Apache-LICENSE").write_text("Apache-2.0 original upstream text\\n")
+        (self.crate/"MIT-LICENSE").write_text("MIT original upstream text\\n")
+        pkg={**self.package,"license":"MIT OR Apache-2.0"}
+        notices=self._build([pkg]).decode()
+        self.assertIn("Apache-2.0 original upstream text",notices)
+        self.assertIn("MIT original upstream text",notices)
+        self.assertIn("BEGIN Apache-LICENSE",notices)
+        self.assertIn("BEGIN MIT-LICENSE",notices)
+
     def test_fails_closed_without_original_license_files(self):
         (self.crate/"LICENSE-MIT").unlink()
         (self.crate/"LICENSE-UNICODE").unlink()

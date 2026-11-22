@@ -287,8 +287,9 @@ def build_third_party_notices(repo: Path, env: dict) -> bytes:
             raise InvalidCandidate("UNTRUSTED_UPSTREAM_LICENSE_PATH")
         filenames = {
             f.name for f in root.iterdir()
-            if f.name.upper().startswith(
+            if (f.name.upper().startswith(
                 ("LICENSE", "LICENCE", "NOTICE", "COPYING", "COPYRIGHT", "UNLICENSE"))
+                or f.name.upper().endswith(("-LICENSE", "-LICENCE", "-NOTICE", "-COPYING")))
             and (f.is_file() or f.is_symlink())
         }
         explicit = pkg.get("license_file")
