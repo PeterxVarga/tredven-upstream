@@ -21,6 +21,7 @@ fn usage() -> &'static str {
      Usage: tredven-upstream inspect-upgrade --repo DIR --project ID --from TAG --to TAG --scanner trivy-json-v2|osv-scanner-json-v2 --scan-report FILE --subject TARGET --scan-commit SHA [--format json|markdown]\n\
      Usage: tredven-upstream inspect-delta --baseline FILE --candidate FILE --scanner trivy-json-v2|osv-scanner-json-v2 --subject TARGET [--format json|markdown]\n\
      Usage: tredven-upstream inspect-upgrade-delta --repo DIR --project ID --from TAG --to TAG --baseline FILE --candidate FILE --scanner trivy-json-v2|osv-scanner-json-v2 --subject TARGET --baseline-commit SHA --candidate-commit SHA [--format json|markdown]\n\
+     Usage: tredven-upstream review-local --repo DIR --from TAG --to TAG --osv-bin FILE --osv-sha256 HEX --allow-public-osv-network [--project ID] [--format json|markdown] [--evidence-dir NEW_DIRECTORY]\n\
      Usage: tredven-upstream review-upgrade --config FILE [--format json|markdown] [--evidence-dir NEW_DIRECTORY]\n\
      Usage: tredven-upstream verify-attestation --artifact FILE --repo OWNER/REPO --repo-id NUM --signer-workflow OWNER/REPO/.github/workflows/NAME.yml --source-ref refs/tags/TAG --source-commit SHA --bundle FILE --trusted-root FILE [--predicate-type URL] [--format json|markdown]\n\
      Shortcut: tredven-upstream verify-attestation --artifact FILE --policy POLICY.json [--format json|markdown]\n\
@@ -748,6 +749,86 @@ fn run_attestation(mut args: impl Iterator<Item = String>, scan_mode: bool) -> R
     })
 }
 
+// R17 first-use path. Public OSV calls require a deliberate flag; local
+// source must already exist, the scanner executable must match a pinned hash.
+fn run_local_review(mut args: impl Iterator<Item = String>) -> Result<u8, String> {
+    let (mut repo, mut project, mut from, mut to, mut bin, mut sha) =
+        (None, None, None, None, None, None);
+    let (mut format, mut evidence) = (None, None);
+    let mut network = false;
+    while let Some(arg) = args.next() {
+        if ["--help", "-h"].contains(&arg.as_str()) {
+            print!("{}", usage());
+            return Ok(0);
+        }
+        if arg == "--allow-public-osv-network" {
+            if network {
+                return Err("DUPLICATE_PUBLIC_OSV_NETWORK_OPT_IN".into());
+            }
+            network = true;
+            continue;
+        }
+        let value = args.next().ok_or("MISSING_LOCAL_REVIEW_OPTION_VALUE")?;
+        let dest = match arg.as_str() {
+            "--repo" => &mut repo,
+            "--project" => &mut project,
+            "--from" => &mut from,
+            "--to" => &mut to,
+            "--osv-bin" => &mut bin,
+            "--osv-sha256" => &mut sha,
+            "--format" => &mut format,
+            "--evidence-dir" => &mut evidence,
+            _ => return Err("UNRECOGNIZED_LOCAL_REVIEW_OPTION".into()),
+        };
+        if dest.replace(value).is_some() {
+            return Err("DUPLICATE_LOCAL_REVIEW_OPTION".into());
+        }
+    }
+    if !network {
+        return Err("OSV_PUBLIC_API_NETWORK_NOT_EXPLICITLY_APPROVED".into());
+    }
+    let format = format.as_deref().unwrap_or("markdown");
+    if !["json", "markdown"].contains(&format) {
+        return Err("UNSUPPORTED_FORMAT".into());
+    }
+    // Keep this a thin adapter: existing parse_config/review gates are
+    // authoritative; no duplicate scanner/process or provenance subsystem.
+    let request = serde_json::json!({
+        "schema": tredven_upstream::review::SCHEMA,
+        "project": project.as_deref().unwrap_or("local-upgrade"),
+        "repo": repo.ok_or("MISSING_LOCAL_REVIEW_REPO")?,
+        "baseline_tag": from.ok_or("MISSING_LOCAL_REVIEW_FROM")?,
+        "candidate_tag": to.ok_or("MISSING_LOCAL_REVIEW_TO")?,
+        "scan": {
+            "mode": "local-osv-lockfile",
+            "lockfile": "Cargo.lock",
+            "binary": bin.ok_or("MISSING_LOCAL_REVIEW_SCANNER")?,
+            "binary_sha256": sha.ok_or("MISSING_LOCAL_REVIEW_SCANNER_SHA256")?,
+            "allow_public_osv_network": true
+        }
+    });
+    let bytes = serde_json::to_vec(&request).map_err(|_| "LOCAL_REVIEW_CONFIG_SERIALIZE_FAILED")?;
+    let request = tredven_upstream::review::parse_config(&bytes, Path::new("."))?;
+    let result = tredven_upstream::review::review(request)?;
+    if let Some(directory) = evidence {
+        result.save_evidence(Path::new(&directory))?;
+    }
+    let mut stdout = io::stdout().lock();
+    if format == "json" {
+        serde_json::to_writer_pretty(&mut stdout, &result.report)
+            .map_err(|_| "REVIEW_JSON_WRITE_FAILED")?;
+        writeln!(&mut stdout).map_err(|_| "STDOUT_WRITE_FAILED")?;
+    } else {
+        write!(&mut stdout, "{}", result.report.markdown())
+            .map_err(|_| "REVIEW_MARKDOWN_WRITE_FAILED")?;
+    }
+    Ok(match result.report.decision {
+        "BLOCKED" => 2,
+        "UNKNOWN" => 3,
+        _ => 0,
+    })
+}
+
 fn run_review(mut args: impl Iterator<Item = String>) -> Result<u8, String> {
     let mut path = None;
     let mut evidence_dir = None;
@@ -825,6 +906,7 @@ fn run() -> Result<u8, String> {
         Some("inspect-upgrade") => return run_upgrade(args),
         Some("inspect-delta") => return run_delta(args, false),
         Some("inspect-upgrade-delta") => return run_delta(args, true),
+        Some("review-local") => return run_local_review(args),
         Some("review-upgrade") => return run_review(args),
         Some("verify-attestation") => return run_attestation(args, false),
         Some("inspect-attested-scan") => return run_attestation(args, true),

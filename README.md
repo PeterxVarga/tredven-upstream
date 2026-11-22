@@ -1,6 +1,6 @@
 # Tredven Upstream
 
-**An open-source, local-first upgrade preflight for self-hosted software.**
+**An open-source, local-first, evidence-based upgrade review CLI.**
 
 > **Pre-alpha, read-only prototype.** `inspect-git` resolves named tags in a **local Git clone**; `inspect-contract` adds **one exactly pinned OpenSEO PostgreSQL migration prerequisite check**. Neither command authenticates an upstream publisher, fetches source, connects to a running database, executes SQL or certifies a safe upgrade.
 
@@ -14,12 +14,54 @@
 - One **release-specific, source-pinned** SQL/Drizzle contract checks foreign-key parent columns in the *Git-committed baseline schema* without running the SQL.
 - Fail closed: `BLOCKED` for failed checks and contradictory source claims, `REVIEW` for a declared version movement that needs human qualification, `UNKNOWN` for missing evidence.
 - Opt-in multi-project watch plans now combine local Git source changes with externally produced CI/security/backup/rollback evidence in one review report. **Caller-supplied check statuses are not independently verified.**
-- Native **Trivy JSON v2** and **OSV-Scanner v2 JSON** parsing, usable standalone (`inspect-scan`), inside watch plans, or with local Git from one command (`inspect-upgrade`). The CLI does not execute either scanner, authenticate the author or prove complete scan coverage.
+- Native Trivy JSON v2 and OSV-Scanner v2 JSON parsers; the opt-in review-local and review-upgrade paths also execute a user-supplied SHA-pinned OSV binary on two source-bound root Cargo.lock snapshots. No automatic release authority.
 - R7 two-report comparison (`inspect-delta` and Git-tag-bound `inspect-upgrade-delta`), with separate delta and absolute-candidate decisions, strict scope match and no false green from missing scanners.
 - All patch/merge/deploy/send/provider-write/payment/release authority flags are **always false**.
-- Stable, input-bounded, portable source with no runtime network calls or background process.
+- Bounded local processing; only explicitly enabled OSV scans or online attestation verification may use the network. No daemon, telemetry, repository push, merge or deployment.
 
 **NOT supported yet:** independent remote publisher verification; automatic repository cloning/fetching; general SQL parsing or migration execution; arbitrary third-party adapters; Docker/Podman/Kubernetes access; runtime integration testing; live database schema validation; reporting production readiness; managed fleet or billing.
+
+
+## Start here: local free OSS upgrade review (R17)
+
+No cloud account, API token, hosted database or handwritten JSON configuration
+is required. You need a local Git clone containing two release tags and root
+Cargo.lock files, and a separately installed, SHA-256 verified OSV-Scanner v2
+executable. The CLI itself neither clones source nor downloads scanner binaries.
+
+The example uses the real public sharkdp/fd repository and the official
+**Linux amd64 OSV-Scanner v2.7.1** executable. Do not use this exact checksum
+with other OSV versions or platforms.
+
+```bash
+git clone --no-checkout --filter=blob:none https://github.com/sharkdp/fd.git fd-source
+git -C fd-source fetch --tags
+
+./tredven-upstream review-local \
+  --repo "$PWD/fd-source" \
+  --from v10.4.2 --to v10.5.2 \
+  --osv-bin /absolute/path/to/verified/osv-scanner \
+  --osv-sha256 fb7dab19a8bd9bbe5c3189f09d4b7ee1820c9553a23bac202648a56efd2f6ee8 \
+  --allow-public-osv-network \
+  --format markdown
+```
+
+Expected example result: three resolved advisories and **REVIEW**, not an
+automatic upgrade approval. An exit 1 from the scanner with findings indicates
+a completed but vulnerable scan, not a clean scan. The default output is an
+actionable Markdown summary; `--format json` emits the machine report.
+`--evidence-dir /path/to/new-directory` saves exact byte-bound
+evidence, only if the target directory does not already exist.
+
+**Privacy and authority:** the explicit `--allow-public-osv-network`
+flag allows the external scanner to query public OSV services with dependency
+metadata. Do not scan private/sensitive manifests without authorization.
+No Tredven cloud service receives your inputs. Local Git tags do not authenticate
+the remote publisher. Nothing here pushes, merges, deploys, or grants release
+authority. The OSV binary is not included in the Tredven release candidate.
+
+See [the independent real public test](docs/R16_FIRST_REAL_VALUE_COMPETITIVE_GATE.md)
+and [the OSS product direction](docs/R17_OSS_PRODUCT_DIRECTION.md).
 
 ## Run
 

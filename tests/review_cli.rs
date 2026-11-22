@@ -374,3 +374,84 @@ fn authentic_signed_public_binary_never_passes_as_scanner_json() {
     assert_eq!(r["scanner_execution_cryptographically_attested"], false);
     assert_eq!(r["production_ready"], false);
 }
+
+#[test]
+fn r17_first_use_never_makes_implicit_public_network_calls() {
+    let f = Fixture::new();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_tredven-upstream"));
+    let out = cmd
+        .args(["review-local", "--repo"])
+        .arg(&f.repo)
+        .args([
+            "--from",
+            "v0.1.0",
+            "--to",
+            "v0.2.0",
+            "--osv-bin",
+            "/bin/true",
+            "--osv-sha256",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&out.stderr)
+            .contains("OSV_PUBLIC_API_NETWORK_NOT_EXPLICITLY_APPROVED")
+    );
+}
+
+#[test]
+fn r17_first_use_preserves_exact_scanner_sha_gate() {
+    let f = Fixture::new();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_tredven-upstream"));
+    let out = cmd
+        .args(["review-local", "--repo"])
+        .arg(&f.repo)
+        .args([
+            "--from",
+            "v0.1.0",
+            "--to",
+            "v0.2.0",
+            "--osv-bin",
+            "/bin/true",
+            "--osv-sha256",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            "--allow-public-osv-network",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("SCANNER_BINARY_SHA256_MISMATCH"));
+}
+
+#[test]
+fn r17_first_use_refuses_duplicate_network_opt_in() {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_tredven-upstream"));
+    let out = cmd
+        .args([
+            "review-local",
+            "--allow-public-osv-network",
+            "--allow-public-osv-network",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("DUPLICATE_PUBLIC_OSV_NETWORK_OPT_IN"));
+}
+
+#[test]
+fn r17_first_use_rejects_invalid_format_without_scan() {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_tredven-upstream"));
+    let out = cmd
+        .args([
+            "review-local",
+            "--format",
+            "yaml",
+            "--allow-public-osv-network",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("UNSUPPORTED_FORMAT"));
+}
