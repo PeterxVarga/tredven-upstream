@@ -2,7 +2,7 @@
 
 **An open-source, local-first, evidence-based upgrade review CLI.**
 
-> **Pre-alpha, read-only prototype.** `inspect-git` resolves named tags in a **local Git clone**; `inspect-contract` adds **one exactly pinned OpenSEO PostgreSQL migration prerequisite check**. Neither command authenticates an upstream publisher, fetches source, connects to a running database, executes SQL or certifies a safe upgrade.
+> **Experimental alpha, read-only dependency upgrade review.** The previous signed Linux `v0.1.0-alpha.1` is [publicly downloadable](https://github.com/PeterxVarga/tredven-upstream/releases/tag/v0.1.0-alpha.1); **the new R26 multi-ecosystem support described below is NOT included in that release**. The tool reads local Git commits and known scanner formats but never certifies a safe upgrade or grants production/deployment authority.
 
 [MIT license](LICENSE) · Rust 2024 · Works without an account, Docker socket or hosted service.
 
@@ -14,7 +14,7 @@
 - One **release-specific, source-pinned** SQL/Drizzle contract checks foreign-key parent columns in the *Git-committed baseline schema* without running the SQL.
 - Fail closed: `BLOCKED` for failed checks and contradictory source claims, `REVIEW` for a declared version movement that needs human qualification, `UNKNOWN` for missing evidence.
 - Opt-in multi-project watch plans now combine local Git source changes with externally produced CI/security/backup/rollback evidence in one review report. **Caller-supplied check statuses are not independently verified.**
-- Native Trivy JSON v2 and OSV-Scanner v2 JSON parsers; the opt-in review-local and review-upgrade paths also execute a user-supplied SHA-pinned OSV binary on two source-bound root Cargo.lock snapshots. No automatic release authority.
+- Native Trivy JSON v2 and OSV-Scanner v2 JSON parsers. The opt-in Rust review CLI can execute a SHA-pinned official OSV-Scanner on **one selected lockfile/manifest from supported project ecosystems** (npm/JavaScript, Go, Python, Rust, Java, .NET, and others) bound to two local Git-tag objects. Multiple project dependency files are not silently treated as fully covered. Signed-CI receipt integration remains Cargo.lock-specific. No automatic release authority.
 - R7 two-report comparison (`inspect-delta` and Git-tag-bound `inspect-upgrade-delta`), with separate delta and absolute-candidate decisions, strict scope match and no false green from missing scanners.
 - All patch/merge/deploy/send/provider-write/payment/release authority flags are **always false**.
 - Bounded local processing; only explicitly enabled OSV scans or online attestation verification may use the network. No daemon, telemetry, repository push, merge or deployment.
@@ -22,7 +22,43 @@
 **NOT supported yet:** independent remote publisher verification; automatic repository cloning/fetching; general SQL parsing or migration execution; arbitrary third-party adapters; Docker/Podman/Kubernetes access; runtime integration testing; live database schema validation; reporting production readiness; managed fleet or billing.
 
 
-## Start here: first-use public Rust upgrade review (R18)
+## Start here: first-use dependency upgrade review (Rust program, any supported project ecosystem)
+
+**R26 development revision (not yet in the published v0.1.0-alpha.1 binary):**
+Tredven itself is compiled from Rust, but the projects it analyzes can use
+many ecosystems supported by the upstream OSV-Scanner. It reads the two
+Git-tagged versions of **one selected dependency file**, not project runtime code.
+If exactly one supported lockfile is tracked in the candidate Git root, it
+selects that file automatically. Otherwise use `--lockfile RELATIVE_PATH`.
+If multiple root lockfiles exist, selection is **explicit**: it never claims
+whole-repository or mixed-monorepo dependency coverage based on one scan.
+
+Public JavaScript/npm E2E example (real `axios/axios` Git tags; requires the R26
+branch's Rust binary, Git and explicit public OSV network consent):
+
+```bash
+git clone --no-checkout https://github.com/axios/axios.git axios-source
+
+./bin/tredven-upstream review-local \
+  --repo "$PWD/axios-source" \
+  --from v1.7.7 --to v1.7.8 \
+  --install-pinned-osv --allow-public-osv-network \
+  --format markdown
+```
+
+Go: use `--repo ./podinfo-source --from 6.8.0 --to 6.9.0` with the same
+approved flags. Python: use `--repo ./httpx-source --from 0.27.1 --to 0.27.2`.
+For a nested frontend, additionally specify
+`--lockfile apps/web/package-lock.json`. Lockfile paths must come from both
+selected Git commits; symlinks, unsafe paths and missing sources are rejected.
+
+This is **dependency vulnerability and Git change evidence**, not an all-purpose
+source-code or runtime security certification. `requirements.txt`, `pom.xml`
+and other non-fully-pinned manifests can produce partial coverage; scanner
+output never grants production approval. [R26 scope and real npm/Go/Python
+evidence](docs/R26_MULTIECOSYSTEM_PROJECT_REVIEWS.md).
+
+### Historical R18 Rust/Cargo demonstration
 
 No Tredven cloud account, token, telemetry, prewritten JSON or manually installed
 OSV-Scanner is needed on **Linux x86-64**. Extract the **locally verified,

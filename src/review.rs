@@ -4,7 +4,8 @@
 use crate::PreflightReport;
 use crate::attestation::{self, Policy, Verdict};
 use crate::delta::{self, DeltaDecision, ScanDeltaReport};
-use crate::git_source::{git, inspect_local_git};
+use crate::git_source::inspect_local_git;
+use crate::lockfile;
 use crate::scanner::{self, ScanDecision, ScanSummary, ScannerFormat};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -85,6 +86,8 @@ pub struct Report {
     pub project: String,
     pub source: PreflightReport,
     pub scan_mode: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub analyzed_lockfile: Option<String>,
     pub scanner_binary_sha256: Option<String>,
     pub baseline: Evidence,
     pub candidate: Evidence,
@@ -135,6 +138,11 @@ impl Report {
             self.candidate.local_execution_observed,
             self.all_artifact_signatures_verified
         );
+        if let Some(lockfile) = self.analyzed_lockfile.as_deref() {
+            summary.push_str(&format!(
+                "\nAnalyzed dependency file: {lockfile} (one selected file, NOT whole-repository coverage)\n"
+            ));
+        }
         if self.delta.comparable_scan_scope {
             if !self.delta.new_sample.is_empty() || !self.delta.resolved_sample.is_empty() {
                 summary.push_str("\nSpecific findings (bounded sample; not a release approval):\n");
@@ -220,16 +228,28 @@ impl ReviewOutput {
                 return Err("CANDIDATE_LOCKFILE_EVIDENCE_NOT_QUALIFIED".into());
             }
         }
+        // Preserve legacy Cargo.lock receipt names for signed-CI mode;
+        // for local multi-ecosystem scans write the selected source basename.
+        let selected_basename = self
+            .report
+            .analyzed_lockfile
+            .as_deref()
+            .unwrap_or("Cargo.lock")
+            .rsplit('/')
+            .next()
+            .ok_or("EVIDENCE_LOCKFILE_NAME_INVALID")?;
+        let baseline_name = format!("baseline.{selected_basename}");
+        let candidate_name = format!("candidate.{selected_basename}");
         let mut entries = vec![
             ("baseline.scanner.json", self.baseline_json.as_slice()),
             ("candidate.scanner.json", self.candidate_json.as_slice()),
             ("review.json", report.as_slice()),
         ];
         if let Some(bytes) = self.baseline_lockfile.as_ref() {
-            entries.push(("baseline.Cargo.lock", bytes.as_slice()));
+            entries.push((baseline_name.as_str(), bytes.as_slice()));
         }
         if let Some(bytes) = self.candidate_lockfile.as_ref() {
-            entries.push(("candidate.Cargo.lock", bytes.as_slice()));
+            entries.push((candidate_name.as_str(), bytes.as_slice()));
         }
         if let Some(bytes) = self.signed_ci_receipt.as_ref() {
             if self
@@ -361,12 +381,19 @@ impl Drop for Scratch {
 fn run_osv(
     binary: &Path,
     scratch: &Scratch,
+    source_path: &str,
     lockfile: &[u8],
 ) -> Result<(Vec<u8>, i32, String), String> {
     if lockfile.is_empty() || lockfile.len() > MAX_LOCK {
         return Err("LOCKFILE_BYTES_OUT_OF_BOUNDS".into());
     }
-    let lockpath = scratch.dir.join("Cargo.lock");
+    if !lockfile::supported(source_path) {
+        return Err("UNSUPPORTED_OR_UNSAFE_LOCKFILE_PATH".into());
+    }
+    let lockpath = scratch.dir.join(source_path);
+    if let Some(parent) = lockpath.parent() {
+        fs::create_dir_all(parent).map_err(|_| "LOCKFILE_SNAPSHOT_PARENT_CREATE_FAILED")?;
+    }
     fs::write(&lockpath, lockfile).map_err(|_| "LOCKFILE_SNAPSHOT_WRITE_FAILED")?;
     let stdout = scratch.dir.join("scanner-stdout.json");
     let stderr = scratch.dir.join("scanner-stderr.txt");
@@ -387,7 +414,7 @@ fn run_osv(
             "scan",
             "source",
             "--lockfile",
-            "Cargo.lock",
+            source_path,
             "--format",
             "json",
             "--all-packages",
@@ -466,8 +493,8 @@ fn validate_config(config: &Config) -> Result<(), String> {
             binary_sha256,
             ..
         } => {
-            if lockfile != "Cargo.lock" {
-                return Err("R10_LOCAL_SCANNER_ONLY_SUPPORTS_ROOT_CARGO_LOCK".into());
+            if !lockfile::supported(lockfile) {
+                return Err("UNSUPPORTED_OR_UNSAFE_LOCKFILE_PATH".into());
             }
             if !allow_public_osv_network {
                 return Err("OSV_PUBLIC_API_NETWORK_NOT_EXPLICITLY_APPROVED".into());
@@ -612,6 +639,10 @@ pub fn review(config: Config) -> Result<ReviewOutput, String> {
             attestation,
         );
     }
+    let analyzed_lockfile = match &config.scan {
+        ScanInput::LocalOsvLockfile { lockfile, .. } => Some(lockfile.to_owned()),
+        _ => None,
+    };
     let (
         scan_mode,
         format,
@@ -695,24 +726,19 @@ pub fn review(config: Config) -> Result<ReviewOutput, String> {
             binary_sha256,
             allow_public_osv_network,
         } => {
-            if lockfile != "Cargo.lock" || !allow_public_osv_network {
+            if !lockfile::supported(&lockfile) || !allow_public_osv_network {
                 return Err("OSV_PUBLIC_SCANNER_POLICY_NOT_APPROVED".into());
             }
             let digest = binary_digest(&binary, &binary_sha256)?;
             let scratch = Scratch::new()?;
-            let base_input = git(
-                &config.repo,
-                &["show", &format!("{base_commit}:Cargo.lock")],
-            )?;
-            let cand_input = git(
-                &config.repo,
-                &["show", &format!("{candidate_commit}:Cargo.lock")],
-            )?;
+            let base_input = lockfile::snapshot(&config.repo, base_commit, &lockfile)?;
+            let cand_input = lockfile::snapshot(&config.repo, candidate_commit, &lockfile)?;
             if base_input.is_empty() || cand_input.is_empty() {
                 return Err("LOCKFILE_NOT_IN_BOTH_PINNED_SOURCE_COMMITS".into());
             }
-            let (base_scan, bexit, path) = run_osv(&binary, &scratch, &base_input)?;
-            let (candidate_scan, cexit, cpath) = run_osv(&binary, &scratch, &cand_input)?;
+            let (base_scan, bexit, path) = run_osv(&binary, &scratch, &lockfile, &base_input)?;
+            let (candidate_scan, cexit, cpath) =
+                run_osv(&binary, &scratch, &lockfile, &cand_input)?;
             if path != cpath {
                 return Err("OSV_SCANNED_DIFFERENT_FILE_PATHS".into());
             }
@@ -801,6 +827,7 @@ pub fn review(config: Config) -> Result<ReviewOutput, String> {
         project: config.project,
         source,
         scan_mode,
+        analyzed_lockfile,
         scanner_binary_sha256: binary_sha,
         baseline: base_evidence,
         candidate: candidate_evidence,
