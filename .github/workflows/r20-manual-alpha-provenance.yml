@@ -1,0 +1,140 @@
+# R20 manual-only alpha artifact provenance. Draft PR is review-only.
+# Owner must separately approve merges, dispatch, external distribution, and release.
+name: R20 Owner-Gated Signed Alpha Candidate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: r20-manual-alpha-candidate
+  cancel-in-progress: false
+
+jobs:
+  portable-alpha:
+    # No unreviewed ref, third-party actor, PR or push may initiate this.
+    if: >-
+      github.repository == 'PeterxVarga/tredven-upstream' &&
+      github.repository_id == 1467524521 &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'workflow_dispatch' &&
+      github.actor == 'PeterxVarga' &&
+      github.triggering_actor == 'PeterxVarga'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Check out the approved main commit without persisted credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 SHA pinned
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Qualify exact repository and source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = 'PeterxVarga/tredven-upstream'
+          test "$GITHUB_REF" = 'refs/heads/main'
+          test "$GITHUB_EVENT_NAME" = 'workflow_dispatch'
+          test "$GITHUB_ACTOR" = 'PeterxVarga'
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          command -v readelf
+          command -v python3
+          command -v git
+
+      - name: Install pinned Rust toolchain, optional musl target, and locked crates
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.100.0 --profile minimal --component rustfmt --component clippy
+          rustup target add x86_64-unknown-linux-musl --toolchain 1.100.0
+          rustc +1.100.0 --version | grep -F 'rustc 1.100.0'
+          cargo +1.100.0 fetch --locked
+
+      - name: Build and independently reverify the local static alpha candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The local builder performs offline tests, license completeness,
+          # Cargo.lock checks, ELF linker checks, archive byte hashing.
+          python3 -I -B scripts/release_candidate.py build \
+            --portable-musl --out "$GITHUB_WORKSPACE/output/r20-alpha"
+          python3 -I -B scripts/release_candidate.py verify \
+            --dir "$GITHUB_WORKSPACE/output/r20-alpha"
+          ( cd "$GITHUB_WORKSPACE/output/r20-alpha" && sha256sum --check SHA256SUMS )
+          python3 - <<'PY'
+          import json,os,pathlib
+          r=pathlib.Path(os.environ['GITHUB_WORKSPACE'])/'output/r20-alpha'
+          m=json.loads((r/'manifest.json').read_text())
+          assert m['schema']=='tredven.upstream.local-release-candidate.v2'
+          assert m['source_commit']==os.environ['GITHUB_SHA']
+          assert m['target']=='x86_64-unknown-linux-musl'
+          assert m['artifacts']['archive']['filename']=='tredven-upstream-v0.1.0-x86_64-unknown-linux-musl.tar.gz'
+          assert all(m[k] is False for k in (
+              'publication_authorized','signature_verified',
+              'scanner_execution_attested','source_publisher_attested','production_ready'))
+          PY
+
+      - name: Smoke-test actual extracted archive without network or provider access
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/r20-extracted"
+          mkdir -p "$dir"
+          tar -xzf "$GITHUB_WORKSPACE/output/r20-alpha/tredven-upstream-v0.1.0-x86_64-unknown-linux-musl.tar.gz" -C "$dir"
+          test -s "$dir/THIRD_PARTY_NOTICES.txt"
+          grep -Fq 'Registry packages: 21' "$dir/THIRD_PARTY_NOTICES.txt"
+          test -s "$dir/RUST_RUNTIME_NOTICES.html"
+          grep -Fq 'musl libc' "$dir/RUST_RUNTIME_NOTICES.html"
+          "$dir/bin/tredven-upstream" --help | grep -F 'review-local'
+          "$dir/bin/tredven-upstream" inspect \
+            --input fixtures/upgrade-review.json --format json > "$RUNNER_TEMP/r20-inspect.json"
+          python3 - <<'PY'
+          import json,os,pathlib
+          j=json.loads((pathlib.Path(os.environ['RUNNER_TEMP'])/'r20-inspect.json').read_text())
+          assert j['decision']=='REVIEW'
+          assert j['production_ready'] is False
+          PY
+
+      - name: Sign the exact archive with official GitHub/Sigstore provenance
+        id: signed_archive
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2 pinned
+        with:
+          subject-path: ${{ github.workspace }}/output/r20-alpha/tredven-upstream-v0.1.0-x86_64-unknown-linux-musl.tar.gz
+
+      - name: Preserve separately verifiable attestation bundle
+        shell: bash
+        env:
+          BUNDLE_PATH: ${{ steps.signed_archive.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          test -n "$BUNDLE_PATH"
+          test -f "$BUNDLE_PATH"
+          test ! -L "$BUNDLE_PATH"
+          bytes=$(wc -c < "$BUNDLE_PATH")
+          test "$bytes" -ge 1000 && test "$bytes" -le 2097152
+          install -m 0600 "$BUNDLE_PATH" "$RUNNER_TEMP/r20-alpha.attestation.bundle.jsonl"
+
+      - name: Upload candidate archive and exact hash/metadata (NOT a GitHub Release)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4 pinned
+        with:
+          name: r20-alpha-candidate-bytes
+          path: ${{ github.workspace }}/output/r20-alpha/*
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Upload attestation bundle separately for independent verification
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4 pinned
+        with:
+          name: r20-alpha-attestation-bundle
+          path: ${{ runner.temp }}/r20-alpha.attestation.bundle.jsonl
+          retention-days: 7
+          if-no-files-found: error
+
+# No `on: push`, `on: pull_request`, `gh release`, create-release, merge,
+# deployment, package registry upload, or external message delivery.

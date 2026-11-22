@@ -125,6 +125,47 @@ license/byte checks do not replace legal review or independent authenticity
 attestation. Windows/macOS and hosted release verification are not covered.
 See [R19 release qualification](docs/R19_OSS_ALPHA_RELEASE_QUALIFICATION.md).
 
+## Owner-gated signed alpha build (R20; NOT YET A RELEASE)
+
+An additional **manual-only** GitHub Actions workflow is in review:
+`.github/workflows/r20-manual-alpha-provenance.yml`. It can build
+the same locally qualified static Linux x86-64 candidate on a GitHub-hosted
+runner and sign the **exact tar.gz archive** using the official,
+SHA-pinned `actions/attest-build-provenance` action. The workflow
+is strictly restricted to the owner, official repository identity, and
+the approved main branch. It uploads short-retention Actions artifacts
+and the independently verifiable signature bundle; **it cannot publish a
+GitHub Release, merge or deploy.**
+
+**At this stage no hosted attestation has been generated.** The workflow is
+not yet on `main` and must not be dispatched before separate owner
+review and approval. A plain SHA256SUMS file or a successful local R19 test
+is not a cryptographic signature.
+
+After a **real** signed run, obtain its completed RUN_ID and the approved
+40-character main commit SHA before performing independent verification:
+
+```bash
+gh run download RUN_ID -R PeterxVarga/tredven-upstream \
+  --name r20-alpha-candidate-bytes --dir ./candidate
+
+gh attestation verify \
+  ./candidate/tredven-upstream-v0.1.0-x86_64-unknown-linux-musl.tar.gz \
+  --repo PeterxVarga/tredven-upstream \
+  --signer-workflow PeterxVarga/tredven-upstream/.github/workflows/r20-manual-alpha-provenance.yml \
+  --source-ref refs/heads/main \
+  --source-digest REAL_APPROVED_MAIN_COMMIT_SHA \
+  --deny-self-hosted-runners
+```
+
+The native GitHub CLI performs the cryptographic verification. If you
+have a trusted checkout of this repository, the wrapper
+`python3 -I -B scripts/verify_signed_alpha.py --dir ./candidate`
+also verifies the local archive/manifest and checks the exact signer and
+source digest. Both paths **must fail** for an unsigned alpha candidate.
+Learn more about the separate owner gates and evidence levels in
+[R20 signed alpha qualification](docs/R20_OWNER_GATED_SIGNED_ALPHA.md).
+
 ## Run
 
 Requires a local Rust toolchain (1.100.0 pinned for contributors). The `inspect-git` command additionally requires an installed `git` executable and an existing local Git repository with named tags. Other toolchains may compile because the crate's minimum Rust version is 1.85.
