@@ -1,0 +1,8 @@
+{
+  "schema": "tredven.upstream.preflight-input.v1",
+  "project": "example-service",
+  "baseline": {"tag": "v1.0.0", "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+  "candidate": {"tag": "v1.1.0"},
+  "compare_coverage": "unknown",
+  "checks": [{"name": "integration-smoke", "status": "not_run"}]
+}

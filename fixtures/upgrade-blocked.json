@@ -1,0 +1,10 @@
+{
+  "schema": "tredven.upstream.preflight-input.v1",
+  "project": "example-service",
+  "baseline": {"tag": "v1.0.0", "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+  "candidate": {"tag": "v1.1.0", "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+  "source_verified": false,
+  "compare_coverage": "unknown",
+  "changed_paths": [],
+  "checks": [{"name": "source-identity", "status": "failed"}]
+}

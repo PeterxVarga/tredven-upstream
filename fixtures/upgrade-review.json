@@ -1,0 +1,17 @@
+{
+  "schema": "tredven.upstream.preflight-input.v1",
+  "project": "example-service",
+  "baseline": {"tag": "v1.0.0", "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+  "candidate": {"tag": "v1.1.0", "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+  "source_verified": true,
+  "compare_coverage": "complete",
+  "changed_paths": [
+    "db/migrations/0002.sql",
+    "src/api/contracts.rs",
+    "Dockerfile"
+  ],
+  "checks": [
+    {"name": "unit", "status": "passed"},
+    {"name": "db-migration-replay", "status": "not_run"}
+  ]
+}
