@@ -1,6 +1,8 @@
 //! Deterministic, side-effect-free upgrade evidence evaluation.
 //! This crate never connects to a host, invokes a shell, or grants release authority.
 
+pub mod git_source;
+
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -89,6 +91,12 @@ impl Authority {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImpactCandidate {
+    pub path: String,
+    pub category: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PreflightReport {
     pub schema: String,
     /// No upstream source or runtime was contacted: input assertions are caller-supplied.
@@ -96,11 +104,14 @@ pub struct PreflightReport {
     pub project: String,
     pub baseline_tag: String,
     pub candidate_tag: String,
+    pub baseline_commit: Option<String>,
+    pub candidate_commit: Option<String>,
     pub decision: Decision,
     pub source_changed: Option<bool>,
     pub compare_coverage: CompareCoverage,
     pub changed_paths_considered: usize,
     pub impact_classes: BTreeMap<String, usize>,
+    pub impact_candidates: Vec<ImpactCandidate>,
     pub checks: Vec<Check>,
     pub reasons: Vec<String>,
     pub next_action: String,
@@ -155,16 +166,17 @@ fn valid_sha(sha: &str) -> bool {
 }
 
 fn valid_repo_path(path: &str) -> bool {
+    // Paths are classified, never opened or invoked. Real Git projects legitimately
+    // contain '$', '[', ']' and Unicode filenames; reject traversal and control
+    // characters rather than applying an unjustified shell-argument allowlist.
     !path.is_empty()
-        && path.len() <= 256
+        && path.len() <= 2048
         && !path.starts_with('/')
         && !path.contains('\\')
+        && !path.chars().any(char::is_control)
         && path
             .split('/')
             .all(|part| !part.is_empty() && part != "." && part != "..")
-        && path
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"/-_.@+".contains(&b))
 }
 
 pub fn validate(input: &PreflightInput) -> Result<(), String> {
@@ -205,6 +217,13 @@ pub fn validate(input: &PreflightInput) -> Result<(), String> {
 }
 
 pub fn inspect(input: PreflightInput) -> Result<PreflightReport, String> {
+    inspect_with_origin(input, "CALLER_SUPPLIED_UNVERIFIED")
+}
+
+pub(crate) fn inspect_with_origin(
+    input: PreflightInput,
+    evidence_origin: &str,
+) -> Result<PreflightReport, String> {
     validate(&input)?;
     let source_changed = match (
         input.baseline.commit.as_ref(),
@@ -217,6 +236,33 @@ pub fn inspect(input: PreflightInput) -> Result<PreflightReport, String> {
     for path in &input.changed_paths {
         *impact.entry(classify_path(path).to_owned()).or_insert(0) += 1;
     }
+    // A bounded sample of review candidates; paths alone never prove a breakage.
+    // Match the original gate's priority ordering without claiming a risk score.
+    let mut impact_candidates: Vec<ImpactCandidate> = input
+        .changed_paths
+        .iter()
+        .filter_map(|path| {
+            let category = classify_path(path);
+            if category == "OTHER" {
+                None
+            } else {
+                Some(ImpactCandidate {
+                    path: path.clone(),
+                    category: category.into(),
+                })
+            }
+        })
+        .collect();
+    let priority = |category: &str| match category {
+        "WORKER_OR_SEND_SURFACE" => 0,
+        "MIGRATION_OR_SCHEMA" => 1,
+        "API_OR_CONTRACT" => 2,
+        "DEPLOY_OR_DEPENDENCY" => 3,
+        _ => 4,
+    };
+    impact_candidates
+        .sort_by(|a, b| (priority(&a.category), &a.path).cmp(&(priority(&b.category), &b.path)));
+    impact_candidates.truncate(25);
     let mut reasons = Vec::new();
     let failed = input.checks.iter().any(|c| c.status == CheckStatus::Failed);
     if failed {
@@ -265,15 +311,18 @@ pub fn inspect(input: PreflightInput) -> Result<PreflightReport, String> {
     };
     Ok(PreflightReport {
         schema: REPORT_SCHEMA.into(),
-        evidence_origin: "CALLER_SUPPLIED_UNVERIFIED".into(),
+        evidence_origin: evidence_origin.into(),
         project: input.project,
         baseline_tag: input.baseline.tag,
         candidate_tag: input.candidate.tag,
+        baseline_commit: input.baseline.commit,
+        candidate_commit: input.candidate.commit,
         decision,
         source_changed,
         compare_coverage: input.compare_coverage,
         changed_paths_considered: input.changed_paths.len(),
         impact_classes: impact,
+        impact_candidates,
         checks: input.checks,
         reasons,
         next_action: next_action.into(),
@@ -292,9 +341,30 @@ pub fn to_markdown(r: &PreflightReport) -> String {
         r.compare_coverage,
         r.changed_paths_considered
     );
+    out.push_str(&format!(
+        "Evidence origin: `{}`\n\nCommit IDs: `{}` → `{}`\n\nLocal Git objects are not a verified upstream publisher or production runtime.\n\n",
+        r.evidence_origin,
+        r.baseline_commit.as_deref().unwrap_or("UNKNOWN"),
+        r.candidate_commit.as_deref().unwrap_or("UNKNOWN"),
+    ));
     out.push_str("## Changed surface categories\n\n");
     for (category, count) in &r.impact_classes {
         out.push_str(&format!("- {category}: {count}\n"));
+    }
+    out.push_str("\n## Source-path review candidates (classification only)\n\n");
+    for candidate in &r.impact_candidates {
+        // Use a code-span delimiter longer than any backtick run in a Git filename.
+        let longest = candidate
+            .path
+            .split(|c| c != '`')
+            .map(str::len)
+            .max()
+            .unwrap_or(0);
+        let fence = "`".repeat(longest + 1);
+        out.push_str(&format!(
+            "- {}: {}{}{}\n",
+            candidate.category, fence, candidate.path, fence
+        ));
     }
     out.push_str("\n## Missing or blocking evidence\n\n");
     for reason in &r.reasons {
@@ -422,6 +492,32 @@ mod tests {
         let mut x = example();
         x.changed_paths.push("../secrets.txt".into());
         assert_eq!(inspect(x).unwrap_err(), "INVALID_SOURCE_PATH");
+    }
+
+    #[test]
+    fn valid_real_git_filenames_are_not_mistaken_for_shell_injection() {
+        let mut x = example();
+        x.changed_paths
+            .push("src/routes/_app/p/$projectId/settings/integrations.tsx".into());
+        x.changed_paths
+            .push("web/src/routes/js/meta[.]js.ts".into());
+        x.changed_paths.push("docs/árváltozás.md".into());
+        assert_eq!(inspect(x).unwrap().decision, Decision::Review);
+    }
+
+    #[test]
+    fn control_characters_and_absolute_paths_are_still_rejected() {
+        for bad in [
+            "/etc/passwd",
+            "db/../passwd",
+            "x/./y",
+            "src/evil\\nname",
+            "src/evil\\\\name",
+        ] {
+            let mut x = example();
+            x.changed_paths.push(bad.into());
+            assert_eq!(inspect(x).unwrap_err(), "INVALID_SOURCE_PATH");
+        }
     }
 
     #[test]

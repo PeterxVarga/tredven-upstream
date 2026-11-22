@@ -4,19 +4,80 @@ use std::io::{self, Read, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
-use tredven_upstream::{Decision, PreflightInput, inspect, to_markdown};
+use tredven_upstream::{
+    Decision, PreflightInput, PreflightReport, git_source::inspect_local_git, inspect, to_markdown,
+};
 
 const MAX_INPUT_BYTES: u64 = 1024 * 1024;
 
 fn usage() -> &'static str {
     "Tredven Upstream — local read-only upgrade evidence\n\
      Usage: tredven-upstream inspect --input FILE|--stdin [--format json|markdown]\n\
+     Usage: tredven-upstream inspect-git --repo DIR --project ID --from TAG --to TAG [--format json|markdown]\n\
+     Git inspection is local only, never a remote release or production attestation.\n\
      No network, Docker, provider credentials, mutations or deploy permissions.\n"
 }
 
 fn fail(message: &str) -> ExitCode {
     eprintln!("ERROR: {message}");
     ExitCode::from(1)
+}
+
+fn emit(report: &PreflightReport, format: &str) -> Result<u8, String> {
+    if !["json", "markdown"].contains(&format) {
+        return Err("UNSUPPORTED_FORMAT".into());
+    }
+    let mut stdout = io::stdout().lock();
+    if format == "json" {
+        serde_json::to_writer_pretty(&mut stdout, report).map_err(|_| "JSON_OUTPUT_FAILED")?;
+        writeln!(&mut stdout).map_err(|_| "STDOUT_WRITE_FAILED")?;
+    } else {
+        write!(&mut stdout, "{}", to_markdown(report)).map_err(|_| "STDOUT_WRITE_FAILED")?;
+    }
+    Ok(if report.decision == Decision::Blocked {
+        2
+    } else {
+        0
+    })
+}
+
+fn run_git(mut args: impl Iterator<Item = String>) -> Result<u8, String> {
+    let (mut repo, mut project, mut from, mut to) = (None, None, None, None);
+    let mut format = "json".to_owned();
+    while let Some(arg) = args.next() {
+        let value = match arg.as_str() {
+            "--help" | "-h" => {
+                print!("{}", usage());
+                return Ok(0);
+            }
+            "--repo" | "--project" | "--from" | "--to" | "--format" => {
+                args.next().ok_or("MISSING_GIT_ARGUMENT_VALUE")?
+            }
+            _ => return Err("UNRECOGNIZED_GIT_ARGUMENT".into()),
+        };
+        let target = match arg.as_str() {
+            "--repo" => &mut repo,
+            "--project" => &mut project,
+            "--from" => &mut from,
+            "--to" => &mut to,
+            _ => {
+                if format != "json" {
+                    return Err("FORMAT_SPECIFIED_MORE_THAN_ONCE".into());
+                }
+                format = value;
+                continue;
+            }
+        };
+        if target.replace(value).is_some() {
+            return Err("GIT_ARGUMENT_SPECIFIED_MORE_THAN_ONCE".into());
+        }
+    }
+    let repo = repo.ok_or("MISSING_GIT_REPO")?;
+    let project = project.ok_or("MISSING_GIT_PROJECT")?;
+    let from = from.ok_or("MISSING_GIT_FROM_TAG")?;
+    let to = to.ok_or("MISSING_GIT_TO_TAG")?;
+    let report = inspect_local_git(Path::new(&repo), &project, &from, &to)?;
+    emit(&report, &format)
 }
 
 fn run() -> Result<u8, String> {
@@ -27,6 +88,7 @@ fn run() -> Result<u8, String> {
             return Ok(0);
         }
         Some("inspect") => {}
+        Some("inspect-git") => return run_git(args),
         _ => return Err(usage().trim_end().into()),
     };
 
@@ -83,18 +145,7 @@ fn run() -> Result<u8, String> {
 
     let request: PreflightInput = serde_json::from_str(&input).map_err(|_| "INVALID_INPUT_JSON")?;
     let report = inspect(request)?;
-    let mut stdout = io::stdout().lock();
-    if format == "json" {
-        serde_json::to_writer_pretty(&mut stdout, &report).map_err(|_| "JSON_OUTPUT_FAILED")?;
-        writeln!(&mut stdout).map_err(|_| "STDOUT_WRITE_FAILED")?;
-    } else {
-        write!(&mut stdout, "{}", to_markdown(&report)).map_err(|_| "STDOUT_WRITE_FAILED")?;
-    }
-    Ok(if report.decision == Decision::Blocked {
-        2
-    } else {
-        0
-    })
+    emit(&report, &format)
 }
 
 fn main() -> ExitCode {

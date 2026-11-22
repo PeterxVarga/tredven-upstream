@@ -22,14 +22,14 @@ Internal reference at the time the new public core was started:
 
 ## Baseline scope and honest parity level
 
-First migrated concepts: deterministic source identity comparison, changed-path categories, evidence-state precedence, JSON/Markdown reporting and always-denied authority. This is not a byte-for-byte port of the 408-line Python tool: live Git/GitHub fetching, secure source pin checks, legacy receipt verification and runtime adapters have **not** been ported.
+First migrated concepts: deterministic source identity comparison, changed-path categories, evidence-state precedence, JSON/Markdown reporting, always-denied authority, and now **read-only local Git tag/commit/diff inspection**. This is not a byte-for-byte port of the 408-line Python tool: official remote provenance verification, hosted/provider adapters, legacy receipt verification and runtime tests have **not** been ported.
 
-The current unit/CLI suite covers caller-supplied, synthetic fixtures only. On an owner-controlled environment, an additional **private** differential test may compare the generic path-classifier cases to the legacy Python `kind()` function; only sanitized generic input/output belongs in public fixtures.
+The unit/CLI suite now includes disposable local Git repositories with genuine commits, tags and changed paths. A separate read-only evaluation of the **public OpenSEO** v0.1.27→v0.1.31 Git objects observed 514 changed paths with rename detection disabled, and a **private local** comparison matched the original Python classifier on all 514. This is classifier parity only; no original private code, receipts, customer settings or whole-adapter identity was published. See [R2 public source qualification](R2_SOURCE_QUALIFICATION.md).
 
 ## Staged E2E milestones
 
 1. **COMPLETE (local):** compile a stand-alone Rust binary, deterministic synthetic JSON/Markdown output, fail-closed status, error codes, tests and local formatting/lint checks.
-2. **NEXT:** local **read-only official Git source release adapter** with exact commit/tag verification, bounded HTTP responses, no redirects, no provider authentication and explicit truncated compare coverage; independently compare behavior against private existing gate fixtures.
+2. **PARTIAL (local-only):** `inspect-git` verifies named local Git tags, dereferences the exact commit objects and compares changed paths without changing source or fetching data. **NEXT:** verify the upstream publisher and the intended release refs through an explicitly bounded, authenticated or public read-only source path, with honest truncated/unavailable evidence semantics. Do not infer that a local tag proves remote publisher identity.
 3. Add a neutral extension protocol for versioned, declarative source-verified rules and optional application-specific smoke-test evidence. No arbitrary downloaded executable rules.
 4. Demonstrate two real public upgrade pairs with a meaningful gap not already handled by Renovate or an application's native migration report.
 5. Only separately and explicitly authorized: public v0.x release, opt-in X communication, and actual budget-holder tests for managed verified intelligence infrastructure.

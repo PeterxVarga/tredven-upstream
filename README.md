@@ -2,24 +2,24 @@
 
 **An open-source, local-first upgrade preflight for self-hosted software.**
 
-> **Pre-alpha, read-only prototype.** This version evaluates only **caller-supplied** release evidence. It does **not** fetch a repository, verify a Git commit, inspect a production runtime, test your real application, or certify a safe upgrade. Do not use its status as permission to deploy.
+> **Pre-alpha, read-only prototype.** The new `inspect-git` command verifies named tags and commit objects in an **existing local Git clone**. It does **not** independently authenticate upstream publishers, fetch source over the network, inspect a production runtime, run your application tests, or certify a safe upgrade. Do not use its status as permission to deploy.
 
 [MIT license](LICENSE) · Rust 2024 · Works without an account, Docker socket or hosted service.
 
 ## What works today
 
 - One Rust binary to inspect a **local JSON file or stdin** and emit a machine-readable JSON or Markdown review.
-- Compare two caller-supplied Git commit identities; highlight an incomplete or truncated diff and classify potentially sensitive changed paths.
-- Consume explicit check results (`passed`, `failed`, `not_run`, `unknown`).
+- Compare caller-supplied commits with explicit unverified provenance, or use `inspect-git` to resolve two named tags and obtain a complete **local** changed-path list (no Git checkout or fetch).
+- Consume explicit check results (`passed`, `failed`, `not_run`, `unknown`); list at most 25 paths prioritized for **human review**, not semantic breakage certification.
 - Fail closed: `BLOCKED` for failed checks and contradictory source claims, `REVIEW` for a declared version movement that needs human qualification, `UNKNOWN` for missing evidence.
 - All patch/merge/deploy/send/provider-write/payment/release authority flags are **always false**.
 - Stable, input-bounded, portable source with no runtime network calls or background process.
 
-**NOT supported yet:** live GitHub or Git tag inspection; third-party adapter registration; automatic migration discovery or execution; Docker/Podman/Kubernetes access; integration-test orchestration; reliable assessment of any concrete self-hosted application; reporting true production readiness; managed fleet or billing.
+**NOT supported yet:** independent remote tag/publisher verification; automatic repository cloning/fetching; third-party adapter registration; automatic migration discovery or execution; Docker/Podman/Kubernetes access; integration-test orchestration; reliable assessment of a live self-hosted application; reporting true production readiness; managed fleet or billing.
 
 ## Run
 
-Requires a local Rust toolchain (1.100.0 pinned for contributors). Other toolchains may compile because the crate's minimum Rust version is 1.85.
+Requires a local Rust toolchain (1.100.0 pinned for contributors). The `inspect-git` command additionally requires an installed `git` executable and an existing local Git repository with named tags. Other toolchains may compile because the crate's minimum Rust version is 1.85.
 
 ```bash
 cargo test --locked --all-targets
@@ -28,6 +28,19 @@ cargo run --locked -- inspect --input fixtures/upgrade-review.json --format mark
 cargo run --locked -- inspect --input fixtures/upgrade-blocked.json
 # BLOCKED returns exit code 2, as an intentional safety signal.
 ```
+
+For an **existing local Git clone** (these are example tag names, not a promise your repo has them):
+
+```bash
+cargo run --locked -- inspect-git \
+  --repo /absolute/path/to/your/clone \
+  --project example \
+  --from v1.0.0 \
+  --to v1.1.0 \
+  --format markdown
+```
+
+This command uses the installed local Git executable without any shell interpolation, hooks, external diff tools, network requests, Docker or provider credentials. It does not modify the checkout; local uncommitted files do **not** contribute to the two-tag diff. It checks local commit identities, **not** whether they correspond to signed or currently deployed official releases. Non-UTF-8 Git filenames and overly large diffs are rejected rather than silently accepted as complete.
 
 Example (report excerpt):
 
@@ -49,7 +62,7 @@ Example (report excerpt):
 }
 ```
 
-There is **no telemetry or required cloud account**. Any `source_verified: true` field means *the caller asserts this*, not that this CLI has checked an upstream server.
+There is **no telemetry or required cloud account**. For `inspect`, any `source_verified: true` field means *the caller asserts this*. For `inspect-git`, the report identifies its actual origin as `LOCAL_GIT_OBJECTS_REMOTE_UNATTESTED`. Neither path independently verifies a remote publisher, production runtime, database rollback, business correctness or authorized upgrade.
 
 ## How the prototype decides
 
@@ -61,7 +74,7 @@ There is **no telemetry or required cloud account**. Any `source_verified: true`
 
 No current combination of inputs produces `READY`: that status would require independently obtained source/runtime evidence and an explicit external approval boundary. A green Cargo test does not establish a safe upgrade for your application.
 
-The output is **advisory only**. A `REVIEW` decision may remain appropriate even after all declared checks pass because their coverage is neither complete nor independently verified.
+The output is **advisory only**. A `REVIEW` decision may remain appropriate even after local tag comparison because there are no independently executed runtime/rollback checks. Path categories and review candidates are heuristics, not proof of a breaking change. See the [source-pinned public Git validation](docs/R2_SOURCE_QUALIFICATION.md).
 
 ## Development direction
 
