@@ -1,0 +1,10 @@
+{
+  "schema": "tredven.upstream.system-upgrade.v1",
+  "project": "example-postgres-and-api",
+  "repo": "/absolute/path/to/existing/local/git/repository",
+  "baseline_tag": "v1",
+  "candidate_tag": "v2",
+  "compose_path": "compose.yaml",
+  "upgrading_service": "db",
+  "checks": []
+}

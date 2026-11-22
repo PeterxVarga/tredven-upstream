@@ -23,6 +23,7 @@ fn usage() -> &'static str {
      Usage: tredven-upstream inspect-upgrade-delta --repo DIR --project ID --from TAG --to TAG --baseline FILE --candidate FILE --scanner trivy-json-v2|osv-scanner-json-v2 --subject TARGET --baseline-commit SHA --candidate-commit SHA [--format json|markdown]\n\
      Usage: tredven-upstream review-local --repo DIR --from TAG --to TAG (--install-pinned-osv | --osv-bin FILE --osv-sha256 HEX) --allow-public-osv-network [--project ID] [--lockfile RELATIVE_PATH] [--format json|markdown] [--evidence-dir NEW_DIRECTORY]\n\
      Usage: tredven-upstream review-upgrade --config FILE [--format json|markdown] [--evidence-dir NEW_DIRECTORY]\n\
+     Usage: tredven-upstream qualify-system --config FILE [--stage-dir NEW_PRIVATE_DIRECTORY]\n\
      Usage: tredven-upstream verify-attestation --artifact FILE --repo OWNER/REPO --repo-id NUM --signer-workflow OWNER/REPO/.github/workflows/NAME.yml --source-ref refs/tags/TAG --source-commit SHA --bundle FILE --trusted-root FILE [--predicate-type URL] [--format json|markdown]\n\
      Shortcut: tredven-upstream verify-attestation --artifact FILE --policy POLICY.json [--format json|markdown]\n\
      Usage: tredven-upstream inspect-attested-scan --artifact REPORT.json --scanner trivy-json-v2|osv-scanner-json-v2 --subject TARGET --repo OWNER/REPO --repo-id NUM --signer-workflow OWNER/REPO/.github/workflows/NAME.yml --source-ref refs/tags/TAG --source-commit SHA --bundle FILE --trusted-root FILE [--format json|markdown]\n\
@@ -935,6 +936,48 @@ fn run_review(mut args: impl Iterator<Item = String>) -> Result<u8, String> {
     })
 }
 
+fn run_system_upgrade(mut args: impl Iterator<Item = String>) -> Result<u8, String> {
+    let mut path = None;
+    let mut stage = None;
+    while let Some(arg) = args.next() {
+        if arg == "--help" || arg == "-h" {
+            print!("{}", usage());
+            return Ok(0);
+        }
+        let value = args.next().ok_or("MISSING_SYSTEM_OPTION_VALUE")?;
+        let target = match arg.as_str() {
+            "--config" => &mut path,
+            "--stage-dir" => &mut stage,
+            _ => return Err("UNKNOWN_SYSTEM_UPGRADE_OPTION".into()),
+        };
+        if target.replace(value).is_some() {
+            return Err("DUPLICATE_SYSTEM_UPGRADE_OPTION".into());
+        }
+    }
+    let path = path.ok_or("MISSING_SYSTEM_UPGRADE_CONFIG")?;
+    let path = Path::new(&path);
+    let meta = fs::symlink_metadata(path).map_err(|_| "SYSTEM_CONFIG_MISSING")?;
+    if !meta.file_type().is_file() || meta.len() == 0 || meta.len() > 128 * 1024 {
+        return Err("SYSTEM_CONFIG_NOT_BOUNDED_FILE".into());
+    }
+    let input = fs::read(path).map_err(|_| "SYSTEM_CONFIG_UNREADABLE")?;
+    let base = path.parent().unwrap_or(Path::new("."));
+    let req = tredven_upstream::system_upgrade::parse_request(&input, base)?;
+    let result = tredven_upstream::system_upgrade::qualify(req)?;
+    if let Some(folder) = stage {
+        result.stage_local_candidate(Path::new(&folder))?;
+    }
+    let mut stdout = io::stdout().lock();
+    serde_json::to_writer_pretty(&mut stdout, &result.report)
+        .map_err(|_| "SYSTEM_REPORT_WRITE_FAILED")?;
+    writeln!(&mut stdout).map_err(|_| "SYSTEM_REPORT_WRITE_FAILED")?;
+    Ok(match result.report.decision {
+        "BLOCKED" => 2,
+        "UNKNOWN" => 3,
+        _ => 0,
+    })
+}
+
 fn run() -> Result<u8, String> {
     let mut args = env::args().skip(1);
     match args.next().as_deref() {
@@ -951,6 +994,7 @@ fn run() -> Result<u8, String> {
         Some("inspect-upgrade-delta") => return run_delta(args, true),
         Some("review-local") => return run_local_review(args),
         Some("review-upgrade") => return run_review(args),
+        Some("qualify-system") => return run_system_upgrade(args),
         Some("verify-attestation") => return run_attestation(args, false),
         Some("inspect-attested-scan") => return run_attestation(args, true),
         Some("inspect-contract") => return run_contract(args),
