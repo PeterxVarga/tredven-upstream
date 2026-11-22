@@ -14,6 +14,7 @@
 - One **release-specific, source-pinned** SQL/Drizzle contract checks foreign-key parent columns in the *Git-committed baseline schema* without running the SQL.
 - Fail closed: `BLOCKED` for failed checks and contradictory source claims, `REVIEW` for a declared version movement that needs human qualification, `UNKNOWN` for missing evidence.
 - Opt-in multi-project watch plans now combine local Git source changes with externally produced CI/security/backup/rollback evidence in one review report. **Caller-supplied check statuses are not independently verified.**
+- Native **Trivy JSON v2** and **OSV-Scanner v2 JSON** parsing, usable standalone (`inspect-scan`), inside watch plans, or with local Git from one command (`inspect-upgrade`). The CLI does not execute either scanner, authenticate the author or prove complete scan coverage.
 - All patch/merge/deploy/send/provider-write/payment/release authority flags are **always false**.
 - Stable, input-bounded, portable source with no runtime network calls or background process.
 
@@ -96,6 +97,47 @@ To inspect real sources, edit a copy of the example: set `enabled: true`, provid
 - **REVIEW / exit 0:** declared evidence is present for the opted-in targets, **not** proof that it is correct, complete or safe to deploy.
 
 The output includes a per-group summary and explicit provenance/unknowns. An artifact hash verifies **bytes only**, not that a scanner actually ran or its findings are true. No state ever grants deployment authority or a verified green production approval. [R5 design, OSS source comparison, limits and acceptance](docs/R5_OSS_WORKFLOW_ADOPTION.md).
+
+## Native scanner evidence — Rust R6
+
+The CLI can now **parse real-format Trivy JSON v2 and OSV-Scanner v2 JSON directly**. This means you do not have to manually invent a PASS/FAIL state for a machine-readable scanner file. The scanner runs **separately**, using the upstream tool and permissions you control; the Rust program only reads local files.
+
+**Try the shipped synthetic fixtures** (no scanners or services started):
+
+```bash
+cargo run --locked -- inspect-scan \
+  --input fixtures/scanner/trivy-critical.json \
+  --scanner trivy-json-v2 \
+  --subject 'example/app@sha256:synthetic-candidate' \
+  --format markdown
+# Synthetic critical vulnerability: BLOCKED, exit code 2.
+
+cargo run --locked -- inspect-scan \
+  --input fixtures/scanner/osv-empty.json \
+  --scanner osv-scanner-json-v2 \
+  --subject Cargo.lock
+# Empty results are UNKNOWN, exit code 3; not a false green result.
+```
+
+**One-command source + scanner report**, without hand-authoring a manifest:
+
+```bash
+# Exact candidate commit (caller-supplied statement about scan provenance):
+git -C /absolute/path/to/source rev-parse 'refs/tags/v1.1.0^{commit}'
+
+cargo run --locked -- inspect-upgrade \
+  --repo /absolute/path/to/source \
+  --project example-app --from v1.0.0 --to v1.1.0 \
+  --scanner trivy-json-v2 \
+  --scan-report /absolute/path/to/existing/trivy.json \
+  --subject 'exact-Trivy-ArtifactName' \
+  --scan-commit REPLACE_WITH_40_CHAR_SOURCE_COMMIT \
+  --format markdown
+```
+
+This reads local Git tags and an existing scanner report, automatically computes the file SHA-256, verifies the stated commit matches the candidate tag, and composes a single watch-plan decision. **It cannot independently prove the scanner ran against that commit**. Local Git is not authenticated as an official remote release; `REVIEW` and CLI exit 0 **never** authorize an upgrade.
+
+The original multi-project `inspect-plan` now supports an optional `scan` object per evidence entry, with `status: "unknown"` (a manual `"passed"` is rejected). Supported formats are `trivy-json-v2` and `osv-scanner-json-v2`. A disabled, safe sample is [examples/watch-plan-native-scanner.example.json](examples/watch-plan-native-scanner.example.json). These are **purely synthetic examples**, not real CVEs or Tredven runtime results. Details and security limitations: [R6 native scanner evidence](docs/R6_NATIVE_SCANNER_EVIDENCE.md).
 
 ## How the prototype decides
 

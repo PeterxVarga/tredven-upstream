@@ -111,6 +111,360 @@ impl Fixture {
         command.output().unwrap()
     }
 }
+impl Fixture {
+    fn native_report(&self, filename: &str, scanner: &str, subject: &str) -> PathBuf {
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures/scanner")
+            .join(filename);
+        let bytes = fs::read(source).unwrap();
+        fs::write(&self.artifact, &bytes).unwrap();
+        let hash = format!("{:x}", Sha256::digest(&bytes));
+        let old = self.manifest("unknown", &hash, true);
+        let mut plan: Value = serde_json::from_slice(&fs::read(old).unwrap()).unwrap();
+        let entry = &mut plan["targets"][0]["required_evidence"][0];
+        entry["source_tool"] = if scanner.starts_with("trivy") {
+            "trivy"
+        } else {
+            "osv-scanner"
+        }
+        .into();
+        entry["scan"] = json!({"format":scanner,"expected_subject":subject});
+        let path = self.root.join("native-plan.json");
+        fs::write(&path, serde_json::to_vec_pretty(&plan).unwrap()).unwrap();
+        path
+    }
+}
+fn native_case(
+    filename: &str,
+    scanner: &str,
+    subject: &str,
+    expected_code: i32,
+    decision: &str,
+    reason: &str,
+) {
+    let f = Fixture::new();
+    let p = f.native_report(filename, scanner, subject);
+    let out = f.cli(&p, false);
+    assert_eq!(
+        out.status.code(),
+        Some(expected_code),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let r: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(r["targets"][0]["decision"], decision);
+    assert_eq!(r["targets"][0]["evidence"][0]["reason"], reason);
+    assert_eq!(
+        r["targets"][0]["evidence"][0]["artifact_integrity"],
+        "MATCHED"
+    );
+    assert_eq!(
+        r["targets"][0]["evidence"][0]["candidate_binding"],
+        "MATCHED"
+    );
+    assert_eq!(
+        r["targets"][0]["evidence"][0]["origin"],
+        "PARSED_SCANNER_JSON_TOOL_EXECUTION_NOT_ATTESTED"
+    );
+    assert_eq!(
+        r["targets"][0]["evidence"][0]["scanner_summary"]["decision"],
+        decision
+    );
+    assert_eq!(r["action_authorized"], false);
+    assert_eq!(r["production_ready"], false);
+    assert_eq!(r["performed_remote_queries"], false);
+}
+#[test]
+fn trivy_critical_real_json_shape_blocks() {
+    native_case(
+        "trivy-critical.json",
+        "trivy-json-v2",
+        "example/app@sha256:synthetic-candidate",
+        2,
+        "BLOCKED",
+        "NATIVE_SCANNER_BLOCKING_FINDING",
+    );
+}
+#[test]
+fn trivy_no_findings_still_requires_review_not_ready() {
+    native_case(
+        "trivy-clean.json",
+        "trivy-json-v2",
+        "example/app@sha256:synthetic-candidate",
+        0,
+        "REVIEW",
+        "NATIVE_SCANNER_PARSED_REVIEW_ONLY",
+    );
+}
+#[test]
+fn trivy_empty_results_is_unknown_no_false_green() {
+    native_case(
+        "trivy-empty.json",
+        "trivy-json-v2",
+        "example/app@sha256:synthetic-candidate",
+        3,
+        "UNKNOWN",
+        "NATIVE_SCANNER_COVERAGE_UNKNOWN",
+    );
+}
+#[test]
+fn trivy_secret_finding_blocks_without_exposing_secret_content() {
+    native_case(
+        "trivy-secret.json",
+        "trivy-json-v2",
+        "example/app@sha256:synthetic-candidate",
+        2,
+        "BLOCKED",
+        "NATIVE_SCANNER_BLOCKING_FINDING",
+    );
+}
+#[test]
+fn trivy_mismatched_subject_blocks_even_if_clean() {
+    native_case(
+        "trivy-clean.json",
+        "trivy-json-v2",
+        "other/image",
+        2,
+        "BLOCKED",
+        "NATIVE_SCANNER_BLOCKING_FINDING",
+    );
+}
+#[test]
+fn osv_advisory_blocks_without_cvss_guessing() {
+    native_case(
+        "osv-vulnerable.json",
+        "osv-scanner-json-v2",
+        "Cargo.lock",
+        2,
+        "BLOCKED",
+        "NATIVE_SCANNER_BLOCKING_FINDING",
+    );
+}
+#[test]
+fn osv_scanned_clean_package_stays_review_not_safe() {
+    native_case(
+        "osv-clean.json",
+        "osv-scanner-json-v2",
+        "Cargo.lock",
+        0,
+        "REVIEW",
+        "NATIVE_SCANNER_PARSED_REVIEW_ONLY",
+    );
+}
+#[test]
+fn osv_no_scanned_packages_does_not_become_pass() {
+    native_case(
+        "osv-empty.json",
+        "osv-scanner-json-v2",
+        "Cargo.lock",
+        3,
+        "UNKNOWN",
+        "NATIVE_SCANNER_COVERAGE_UNKNOWN",
+    );
+}
+#[test]
+fn scanner_manual_pass_cannot_override_native_findings() {
+    let f = Fixture::new();
+    let path = f.native_report(
+        "trivy-critical.json",
+        "trivy-json-v2",
+        "example/app@sha256:synthetic-candidate",
+    );
+    let mut plan: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    plan["targets"][0]["required_evidence"][0]["status"] = "passed".into();
+    fs::write(&path, serde_json::to_vec(&plan).unwrap()).unwrap();
+    let output = f.cli(&path, false);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("INVALID_NATIVE_SCANNER_INPUT_CONTRACT")
+    );
+}
+#[test]
+fn scanner_stale_commit_is_rejected_before_parsing_report() {
+    let f = Fixture::new();
+    let path = f.native_report(
+        "trivy-clean.json",
+        "trivy-json-v2",
+        "example/app@sha256:synthetic-candidate",
+    );
+    let mut plan: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    plan["targets"][0]["required_evidence"][0]["candidate_commit"] = "a".repeat(40).into();
+    fs::write(&path, serde_json::to_vec(&plan).unwrap()).unwrap();
+    let output = f.cli(&path, false);
+    assert_eq!(output.status.code(), Some(2));
+    let r: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        r["targets"][0]["evidence"][0]["reason"],
+        "EVIDENCE_BOUND_TO_DIFFERENT_RELEASE"
+    );
+    assert!(
+        r["targets"][0]["evidence"][0]
+            .get("scanner_summary")
+            .is_none()
+    );
+}
+#[test]
+fn scanner_hash_mismatch_blocks_not_reuse_an_older_file() {
+    let f = Fixture::new();
+    let path = f.native_report("osv-clean.json", "osv-scanner-json-v2", "Cargo.lock");
+    let mut plan: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    plan["targets"][0]["required_evidence"][0]["artifact"]["sha256"] = "0".repeat(64).into();
+    fs::write(&path, serde_json::to_vec(&plan).unwrap()).unwrap();
+    let output = f.cli(&path, false);
+    assert_eq!(output.status.code(), Some(2));
+    let r: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        r["targets"][0]["evidence"][0]["reason"],
+        "ARTIFACT_HASH_MISMATCH"
+    );
+}
+#[test]
+fn native_scanner_markdown_omits_report_payload() {
+    let f = Fixture::new();
+    let path = f.native_report(
+        "trivy-secret.json",
+        "trivy-json-v2",
+        "example/app@sha256:synthetic-candidate",
+    );
+    let output = f.cli(&path, true);
+    assert_eq!(output.status.code(), Some(2));
+    let m = String::from_utf8(output.stdout).unwrap();
+    assert!(m.contains("Native TrivyJsonV2: Blocked"));
+    assert!(m.contains("Scanner execution NOT ATTESTED"));
+    assert!(!m.contains("SYNTHETIC_RULE_ID_NO_ACTUAL_SECRET"));
+}
+impl Fixture {
+    fn upgrade(
+        &self,
+        name: &str,
+        scanner: &str,
+        subject: &str,
+        commit_override: Option<&str>,
+    ) -> Output {
+        let original = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures/scanner")
+            .join(name);
+        fs::copy(original, &self.artifact).unwrap();
+        let git = Command::new("git")
+            .arg("-C")
+            .arg(&self.repo)
+            .args(["rev-parse", "refs/tags/v1.1^{commit}"])
+            .output()
+            .unwrap();
+        assert!(git.status.success());
+        let sha = String::from_utf8(git.stdout).unwrap();
+        Command::new(env!("CARGO_BIN_EXE_tredven-upstream"))
+            .args(["inspect-upgrade", "--repo"])
+            .arg(&self.repo)
+            .args([
+                "--project",
+                "synthetic-project",
+                "--from",
+                "v1.0",
+                "--to",
+                "v1.1",
+                "--scanner",
+                scanner,
+                "--scan-report",
+            ])
+            .arg(&self.artifact)
+            .args([
+                "--subject",
+                subject,
+                "--scan-commit",
+                commit_override.unwrap_or(sha.trim()),
+            ])
+            .output()
+            .unwrap()
+    }
+}
+#[test]
+fn one_command_git_plus_trivy_critical_blocks_without_manifest() {
+    let f = Fixture::new();
+    let out = f.upgrade(
+        "trivy-critical.json",
+        "trivy-json-v2",
+        "example/app@sha256:synthetic-candidate",
+        None,
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let r: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        r["targets"][0]["source_inspection"]["changed_paths_considered"],
+        2
+    );
+    assert_eq!(r["targets"][0]["decision"], "BLOCKED");
+    assert_eq!(
+        r["targets"][0]["evidence"][0]["scanner_summary"]["high_or_critical_occurrences"],
+        1
+    );
+    assert_eq!(
+        r["targets"][0]["evidence"][0]["candidate_binding"],
+        "MATCHED"
+    );
+    assert_eq!(r["action_authorized"], false);
+    assert_eq!(r["performed_mutations"], false);
+}
+#[test]
+fn one_command_git_plus_trivy_clean_is_only_review() {
+    let f = Fixture::new();
+    let out = f.upgrade(
+        "trivy-clean.json",
+        "trivy-json-v2",
+        "example/app@sha256:synthetic-candidate",
+        None,
+    );
+    assert_eq!(out.status.code(), Some(0));
+    let r: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(r["targets"][0]["decision"], "REVIEW");
+    assert_eq!(r["external_tool_execution_attested"], false);
+    assert_eq!(r["publisher_attested"], false);
+    assert_eq!(r["production_ready"], false);
+}
+#[test]
+fn one_command_git_plus_osv_finding_blocks() {
+    let f = Fixture::new();
+    let out = f.upgrade(
+        "osv-vulnerable.json",
+        "osv-scanner-json-v2",
+        "Cargo.lock",
+        None,
+    );
+    assert_eq!(out.status.code(), Some(2));
+    let r: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(r["targets"][0]["decision"], "BLOCKED");
+}
+#[test]
+fn one_command_git_plus_empty_scanner_is_unknown() {
+    let f = Fixture::new();
+    let out = f.upgrade("osv-empty.json", "osv-scanner-json-v2", "Cargo.lock", None);
+    assert_eq!(out.status.code(), Some(3));
+    let r: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(r["targets"][0]["decision"], "UNKNOWN");
+}
+#[test]
+fn one_command_wrong_scan_commit_cannot_be_reported_as_review() {
+    let f = Fixture::new();
+    let out = f.upgrade(
+        "trivy-clean.json",
+        "trivy-json-v2",
+        "example/app@sha256:synthetic-candidate",
+        Some(&"a".repeat(40)),
+    );
+    assert_eq!(out.status.code(), Some(2));
+    let r: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        r["targets"][0]["evidence"][0]["reason"],
+        "EVIDENCE_BOUND_TO_DIFFERENT_RELEASE"
+    );
+}
 #[test]
 fn passing_immutable_tool_artifact_and_git_diff_remain_review_not_safe() {
     let f = Fixture::new();

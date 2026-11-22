@@ -1,0 +1,43 @@
+{
+  "schema": "tredven.upstream.watch-plan.v1",
+  "targets": [
+    {
+      "id": "example-application",
+      "group": "security",
+      "enabled": false,
+      "repo": "/ABSOLUTE/PATH/TO/YOUR/LOCAL/GIT/REPOSITORY",
+      "from_tag": "v1.0.0",
+      "to_tag": "v1.1.0",
+      "required_evidence": [
+        {
+          "id": "trivy-native-scan",
+          "source_tool": "trivy",
+          "status": "unknown",
+          "candidate_commit": "0000000000000000000000000000000000000000",
+          "artifact": {
+            "path": "/ABSOLUTE/PATH/TO/LOCAL/TRIVY/REPORT.json",
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "scan": {
+            "format": "trivy-json-v2",
+            "expected_subject": "REPLACE_WITH_EXACT_TRIVY_ArtifactName"
+          }
+        },
+        {
+          "id": "osv-native-scan",
+          "source_tool": "osv-scanner",
+          "status": "unknown",
+          "candidate_commit": "0000000000000000000000000000000000000000",
+          "artifact": {
+            "path": "/ABSOLUTE/PATH/TO/LOCAL/OSV/REPORT.json",
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "scan": {
+            "format": "osv-scanner-json-v2",
+            "expected_subject": "REPLACE_WITH_EXACT_OSV_source.path"
+          }
+        }
+      ]
+    }
+  ]
+}

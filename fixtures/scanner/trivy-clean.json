@@ -1,0 +1,12 @@
+{
+  "SchemaVersion": 2,
+  "ArtifactName": "example/app@sha256:synthetic-candidate",
+  "ArtifactType": "container_image",
+  "Results": [
+    {
+      "Target": "synthetic-app (lang-pkgs)",
+      "Class": "lang-pkgs",
+      "Vulnerabilities": []
+    }
+  ]
+}

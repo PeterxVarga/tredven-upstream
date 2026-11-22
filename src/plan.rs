@@ -1,6 +1,7 @@
 //! Source-only opt-in watch plans inspired by Renovate, Diun and Drydock.
 //! No remote lookup, automatic update, external tool execution or approval.
 use crate::git_source::inspect_local_git;
+use crate::scanner::{ScanDecision, ScanSpec, ScanSummary, inspect_scanner, valid_subject};
 use crate::{CheckStatus, PreflightReport};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -10,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 pub const SCHEMA: &str = "tredven.upstream.watch-plan.v1";
 const MAX_ARTIFACT: u64 = 1024 * 1024;
+const MAX_SCANNER_ARTIFACT: u64 = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -28,6 +30,8 @@ pub struct Evidence {
     pub candidate_commit: Option<String>,
     #[serde(default)]
     pub artifact: Option<ArtifactPin>,
+    #[serde(default)]
+    pub scan: Option<ScanSpec>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -87,6 +91,8 @@ pub struct Gate {
     pub declared_status: CheckStatus,
     pub artifact_integrity: Integrity,
     pub candidate_binding: CandidateBinding,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scanner_summary: Option<ScanSummary>,
     pub origin: &'static str,
     pub reason: &'static str,
 }
@@ -163,6 +169,17 @@ pub fn validate(p: &WatchPlan) -> Result<(), String> {
             {
                 return Err("INVALID_CHECK_CANDIDATE_COMMIT".into());
             }
+            if e.scan.as_ref().is_some_and(|scan| {
+                let tool = match scan.format {
+                    crate::scanner::ScannerFormat::TrivyJsonV2 => "trivy",
+                    crate::scanner::ScannerFormat::OsvScannerJsonV2 => "osv-scanner",
+                };
+                !valid_subject(&scan.expected_subject)
+                    || e.source_tool != tool
+                    || e.status != CheckStatus::Unknown
+            }) {
+                return Err("INVALID_NATIVE_SCANNER_INPUT_CONTRACT".into());
+            }
             if !valid_id(&e.id) || !valid_id(&e.source_tool) || !checks.insert(&e.id) {
                 return Err("INVALID_OR_DUPLICATE_CHECK".into());
             }
@@ -171,16 +188,20 @@ pub fn validate(p: &WatchPlan) -> Result<(), String> {
     Ok(())
 }
 
-fn verify_artifact(base: &Path, pin: Option<&ArtifactPin>) -> Integrity {
+fn read_artifact(
+    base: &Path,
+    pin: Option<&ArtifactPin>,
+    max_bytes: u64,
+) -> (Integrity, Option<Vec<u8>>) {
     let Some(pin) = pin else {
-        return Integrity::Missing;
+        return (Integrity::Missing, None);
     };
     if pin.path.is_empty()
         || pin.path.len() > 2048
         || pin.sha256.len() != 64
         || !pin.sha256.bytes().all(|b| b.is_ascii_hexdigit())
     {
-        return Integrity::InvalidPin;
+        return (Integrity::InvalidPin, None);
     }
     let file = Path::new(&pin.path);
     let full = if file.is_absolute() {
@@ -190,23 +211,22 @@ fn verify_artifact(base: &Path, pin: Option<&ArtifactPin>) -> Integrity {
     };
     let meta = match fs::symlink_metadata(&full) {
         Ok(m) => m,
-        Err(_) => return Integrity::Unavailable,
+        Err(_) => return (Integrity::Unavailable, None),
     };
-    if !meta.file_type().is_file() || meta.len() > MAX_ARTIFACT {
-        return Integrity::UnsafeFile;
+    if !meta.file_type().is_file() || meta.len() > max_bytes {
+        return (Integrity::UnsafeFile, None);
     }
     let bytes = match fs::read(full) {
         Ok(b) => b,
-        Err(_) => return Integrity::Unavailable,
+        Err(_) => return (Integrity::Unavailable, None),
     };
-    if bytes.len() as u64 > MAX_ARTIFACT {
-        return Integrity::UnsafeFile;
+    if bytes.len() as u64 > max_bytes {
+        return (Integrity::UnsafeFile, None);
     }
-    let hash = format!("{:x}", Sha256::digest(&bytes));
-    if hash.eq_ignore_ascii_case(&pin.sha256) {
-        Integrity::Matched
+    if format!("{:x}", Sha256::digest(&bytes)).eq_ignore_ascii_case(&pin.sha256) {
+        (Integrity::Matched, Some(bytes))
     } else {
-        Integrity::Mismatch
+        (Integrity::Mismatch, None)
     }
 }
 
@@ -293,23 +313,67 @@ pub fn inspect_plan(plan: WatchPlan, manifest_parent: &Path) -> Result<Report, S
                     (Some(a), Some(b)) if a.eq_ignore_ascii_case(b) => CandidateBinding::Matched,
                     (Some(_), Some(_)) => CandidateBinding::Mismatch,
                 };
-                let integrity = verify_artifact(manifest_parent, e.artifact.as_ref());
-                let (bad, missing, reason) = match (e.status, integrity, binding) {
-                    (_, _, CandidateBinding::Mismatch) => {
-                        (true, false, "EVIDENCE_BOUND_TO_DIFFERENT_RELEASE")
+                // Parse exactly the file bytes previously hashed and bound to
+                // this source commit; a second file open would introduce TOCTOU.
+                let limit = if e.scan.is_some() {
+                    MAX_SCANNER_ARTIFACT
+                } else {
+                    MAX_ARTIFACT
+                };
+                let (integrity, raw) = read_artifact(manifest_parent, e.artifact.as_ref(), limit);
+                let scanner_summary = match (&e.scan, raw.as_deref()) {
+                    (Some(scan), Some(bytes)) if binding == CandidateBinding::Matched => {
+                        Some(inspect_scanner(bytes, scan.format, &scan.expected_subject))
                     }
-                    (_, Integrity::Mismatch, _) => (true, false, "ARTIFACT_HASH_MISMATCH"),
-                    (CheckStatus::Failed, _, _) => (true, false, "REQUIRED_CHECK_REPORTED_FAILED"),
-                    (CheckStatus::NotRun, _, _) => (false, true, "REQUIRED_CHECK_NOT_RUN"),
-                    (CheckStatus::Unknown, _, _) => (false, true, "REQUIRED_CHECK_UNKNOWN"),
-                    (CheckStatus::Passed, Integrity::Matched, CandidateBinding::Matched) => {
-                        (false, false, "ASSERTED_PASS_ARTIFACT_BYTES_MATCH")
+                    _ => None,
+                };
+                let (bad, missing, reason) = if e.scan.is_some() {
+                    match (
+                        integrity,
+                        binding,
+                        scanner_summary.as_ref().map(|s| s.decision),
+                    ) {
+                        (_, CandidateBinding::Mismatch, _) => {
+                            (true, false, "EVIDENCE_BOUND_TO_DIFFERENT_RELEASE")
+                        }
+                        (Integrity::Mismatch, _, _) => (true, false, "ARTIFACT_HASH_MISMATCH"),
+                        (
+                            Integrity::Matched,
+                            CandidateBinding::Matched,
+                            Some(ScanDecision::Blocked),
+                        ) => (true, false, "NATIVE_SCANNER_BLOCKING_FINDING"),
+                        (
+                            Integrity::Matched,
+                            CandidateBinding::Matched,
+                            Some(ScanDecision::Review),
+                        ) => (false, false, "NATIVE_SCANNER_PARSED_REVIEW_ONLY"),
+                        (
+                            Integrity::Matched,
+                            CandidateBinding::Matched,
+                            Some(ScanDecision::Unknown),
+                        ) => (false, true, "NATIVE_SCANNER_COVERAGE_UNKNOWN"),
+                        _ => (false, true, "NATIVE_SCANNER_EVIDENCE_NOT_VERIFIED"),
                     }
-                    (CheckStatus::Passed, Integrity::Matched, _) => {
-                        (false, true, "PASS_NOT_BOUND_TO_SOURCE_COMMIT")
-                    }
-                    (CheckStatus::Passed, _, _) => {
-                        (false, true, "ASSERTED_PASS_WITHOUT_INTACT_ARTIFACT")
+                } else {
+                    match (e.status, integrity, binding) {
+                        (_, _, CandidateBinding::Mismatch) => {
+                            (true, false, "EVIDENCE_BOUND_TO_DIFFERENT_RELEASE")
+                        }
+                        (_, Integrity::Mismatch, _) => (true, false, "ARTIFACT_HASH_MISMATCH"),
+                        (CheckStatus::Failed, _, _) => {
+                            (true, false, "REQUIRED_CHECK_REPORTED_FAILED")
+                        }
+                        (CheckStatus::NotRun, _, _) => (false, true, "REQUIRED_CHECK_NOT_RUN"),
+                        (CheckStatus::Unknown, _, _) => (false, true, "REQUIRED_CHECK_UNKNOWN"),
+                        (CheckStatus::Passed, Integrity::Matched, CandidateBinding::Matched) => {
+                            (false, false, "ASSERTED_PASS_ARTIFACT_BYTES_MATCH")
+                        }
+                        (CheckStatus::Passed, Integrity::Matched, _) => {
+                            (false, true, "PASS_NOT_BOUND_TO_SOURCE_COMMIT")
+                        }
+                        (CheckStatus::Passed, _, _) => {
+                            (false, true, "ASSERTED_PASS_WITHOUT_INTACT_ARTIFACT")
+                        }
                     }
                 };
                 failed |= bad;
@@ -320,7 +384,12 @@ pub fn inspect_plan(plan: WatchPlan, manifest_parent: &Path) -> Result<Report, S
                     declared_status: e.status,
                     artifact_integrity: integrity,
                     candidate_binding: binding,
-                    origin: "USER_DECLARED_NOT_INDEPENDENTLY_VERIFIED",
+                    scanner_summary,
+                    origin: if e.scan.is_some() {
+                        "PARSED_SCANNER_JSON_TOOL_EXECUTION_NOT_ATTESTED"
+                    } else {
+                        "USER_DECLARED_NOT_INDEPENDENTLY_VERIFIED"
+                    },
                     reason,
                 });
             }
@@ -390,6 +459,14 @@ pub fn markdown(r: &Report) -> String {
                 g.candidate_binding,
                 g.reason
             ));
+            if let Some(scan) = &g.scanner_summary {
+                out.push_str(&format!(
+                    "  - Native {:?}: {:?} ({}) — vulns: {}, misconfigs: {}, high/critical: {}, secrets: {}. Scanner execution NOT ATTESTED.\n",
+                    scan.format,scan.decision,scan.reason,scan.vulnerability_occurrences,
+                    scan.misconfiguration_occurrences,
+                    scan.high_or_critical_occurrences,scan.secret_occurrences
+                ));
+            }
         }
         for reason in &x.reasons {
             out.push_str(&format!("- Gate: {reason}\n"));
@@ -445,19 +522,23 @@ mod tests {
             status: CheckStatus::Passed,
             candidate_commit: None,
             artifact: None,
+            scan: None,
         };
         p.targets[0].required_evidence = vec![check.clone(), check];
         assert!(validate(&p).is_err());
     }
     #[test]
     fn missing_artifact_never_passes() {
-        assert_eq!(verify_artifact(Path::new("/"), None), Integrity::Missing);
+        assert_eq!(
+            read_artifact(Path::new("/"), None, MAX_ARTIFACT).0,
+            Integrity::Missing
+        );
         let pin = ArtifactPin {
             path: "/not-found".into(),
             sha256: "a".repeat(64),
         };
         assert_eq!(
-            verify_artifact(Path::new("/"), Some(&pin)),
+            read_artifact(Path::new("/"), Some(&pin), MAX_ARTIFACT).0,
             Integrity::Unavailable
         );
     }

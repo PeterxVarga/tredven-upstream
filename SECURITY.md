@@ -22,6 +22,14 @@
 - Source paths and input artifact paths are read-only, and the tool does not print raw artifact contents. However, users should keep internal Git receipts and reports private; malformed or adversarial local source trees are not a substitute for an OS sandbox.
 - Do not wire this prototype to automatic production deployment or a privileged long-lived GitHub Actions runner.
 
+## Native scanner evidence trust boundary (R6)
+
+- `inspect-scan` consumes bounded local Trivy JSON schema v2 or OSV-Scanner v2 JSON. **The CLI never runs either scanner**, and parsing a JSON file is not independent proof of tool execution, coverage, currentness, vulnerability database quality, source commit or image identity. Scanner versions and policies can change; unknown/malformed/unsupported reports fail to `UNKNOWN`, not READY.
+- `inspect-upgrade` combines local Git tag inspection with the scanner bytes. The `--scan-commit` field is a **caller assertion**, compared to the candidate tag; a mismatch is BLOCKED. A matching caller assertion cannot attest that a scanner actually analyzed those bytes. Do not wire its exit code 0 to privileged deploy or merge automation.
+- Inside a watch plan, native scanner evidence must use `status: "unknown"`, not a fabricated `passed`. Results are parsed from the **same exact bytes** that were hashed against the supplied SHA-256, avoiding a hash/parse second-read race. The operator controls the digest and file; **no cryptographic tool or scan signature** is verified.
+- Trivy findings with HIGH/CRITICAL severity or any detected secret are blocking; unrecognized severity, empty results and absent scan coverage are UNKNOWN. OSV advisory occurrences are blocked (no speculative severity conversion); empty/no-package reports are UNKNOWN. Those policies are **conservative heuristics**, not a comprehensive vulnerability triage decision.
+- Scanner files are max 8 MiB; regular files only, no final symlink, no raw secret content printed. Reports include aggregate finding counts and source paths from local Git. Treat private reports as sensitive. Input is untrusted JSON; no arbitrary commands, build scripts or code inside files are executed.
+
 ## Report vulnerabilities
 
 Use GitHub's private vulnerability reporting if enabled, or contact the project maintainers through the repository's security reporting channel. Do not publicly post exploit payloads with real user data.

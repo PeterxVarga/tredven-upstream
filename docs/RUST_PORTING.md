@@ -47,3 +47,7 @@ A narrow Rust OpenSEO v0.1.31 Stripe Projects 0049 rule detects whether two fore
 ## R5 OSS workflow reuse
 
 An opt-in, local-only multi-target watch plan now combines exact Git tag changes with user-declared, byte-bound CI, scanner and rollback receipts. This is an adapter *input contract*, not a scanner integration or proof of release safety. See [R5 adoption analysis](R5_OSS_WORKFLOW_ADOPTION.md).
+
+## R6 native security scanner formats
+
+The Rust core now recognizes **Trivy JSON v2** and **OSV-Scanner v2 JSON** as local read-only evidence, in both `inspect-scan` and source-tag-bound `inspect-upgrade` plus multi-target `inspect-plan`. It conservatively interprets output and never runs the original scanner or claims an authenticated producer. This replaces manual PASS/FAIL normalization for those JSON cases, not the original native tools or whole private adapters. See [R6 development and proof](R6_NATIVE_SCANNER_EVIDENCE.md).
