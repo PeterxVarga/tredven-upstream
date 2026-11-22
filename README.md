@@ -50,6 +50,22 @@ one-click upgrades and rollback automation are **not yet implemented**.
 The [R27 real PostgreSQL 16→17 persisted-data failure](docs/R27_SYSTEM_INTEGRATION_COMPATIBILITY_GATE.md)
 shows why these gates matter. No live system, GitHub Release or deployment was touched.
 
+### R28 — real isolated logical migration and rollback (development-only)
+
+A reusable, safety-bounded local test harness now exercises **PostgreSQL 16 →
+17 with a genuine `pg_dump`/`pg_restore`, two separate SQL client containers
+representing API/worker contracts, and restart of the preserved old volume**.
+All eight observed synthetic-system checks bind to the existing Rust
+`qualify-system` reviewer, yielding **REVIEW**, never a live deployment grant.
+An injected failed migration receipt produces **BLOCKED**. No host ports or
+existing user data are used. See
+[scope, repeatable steps, actual receipts and limitations](docs/R28_REAL_ISOLATED_UPGRADE_AND_ROLLBACK.md).
+
+This harness uses Python **only for test orchestration around upstream Podman
+and PostgreSQL tools**; the distributed Tredven CLI and its policy/decision
+engine remain Rust. It is *not* the promised general system integration scanner
+or one-click live upgrader.
+
 ## Start here: first-use dependency upgrade review (Rust program, any supported project ecosystem)
 
 **R26 development revision (not yet in the published v0.1.0-alpha.1 binary):**
