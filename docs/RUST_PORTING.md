@@ -63,3 +63,7 @@ The Rust CLI now accepts a strict, reusable owner-maintained GitHub attestation 
 ## R10 one-command source/OSV evidence review
 
 The Rust core now combines local Git tag inspection, two exact lockfile scanner runs (or imported Trivy/OSV reports), optional delegated GitHub signed-file provenance, strict fail-closed version policy, and an optional checksummed local evidence receipt. The verified public-source E2E found a persistent advisory and returned BLOCKED. See [R10 report](R10_VERIFIED_UPGRADE_REVIEW_MVP.md). Scanner-run cryptographic attestation and production authorization are still NOT PROVEN.
+
+## R11 signed CI receipt contract
+
+The Rust CLI now binds official GitHub/Sigstore-signed workflow receipts to the pinned CI signer source, run ID/attempt, separately scanned Git object SHAs, original Cargo.lock SHA256 and two original OSV report byte hashes. All cryptographic verification is delegated to patched `gh` rather than copied. The manually gated workflow has not run: tests prove unsigned/wrong-source receipts are blocked, not a complete signed scanner execution. See [R11 qualification](R11_SIGNED_CI_UPGRADE_REVIEW.md).

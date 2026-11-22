@@ -59,6 +59,9 @@ pub struct Report {
     pub signatures_cryptographically_verified_by_gh: bool,
     pub validated_certificate_source_identity: bool,
     pub trusted_timestamp_observed: bool,
+    /// Run URL copied only from the cryptographically verified SLSA statement
+    /// after matching the signed subject and certificate source identity.
+    pub verified_workflow_run_uri: Option<String>,
     pub online_attestation_lookup_requested: bool,
     pub attestation_bundle_sha256: Option<String>,
     pub trusted_root_sha256: Option<String>,
@@ -86,6 +89,7 @@ impl Report {
             signatures_cryptographically_verified_by_gh: false,
             validated_certificate_source_identity: false,
             trusted_timestamp_observed: false,
+            verified_workflow_run_uri: None,
             online_attestation_lookup_requested: false,
             attestation_bundle_sha256: None,
             trusted_root_sha256: None,
@@ -449,6 +453,45 @@ pub fn verify_artifact(path: &Path, policy: &Policy) -> Report {
         report.reason = "VERIFIED_CERTIFICATE_OR_SUBJECT_NOT_EXPECTED";
         return report;
     }
+    // R11: run identity is a distinct signed binding. A receipt claiming a
+    // different GITHUB_RUN_ID/GITHUB_RUN_ATTEMPT must NOT borrow a valid
+    // certificate from some other Actions execution, even at the same commit.
+    let parsed: Value = match serde_json::from_slice(&output.stdout) {
+        Ok(v) => v,
+        Err(_) => {
+            report.reason = "VERIFIED_CI_JSON_MALFORMED";
+            return report;
+        }
+    };
+    report.verified_workflow_run_uri = parsed.as_array().and_then(|records| {
+        records.iter().find_map(|item| {
+            let vr = &item["verificationResult"];
+            let cert = &vr["signature"]["certificate"];
+            let invocation = cert["runInvocationURI"].as_str()?;
+            let statement_run =
+                vr["statement"]["predicate"]["runDetails"]["metadata"]["invocationId"].as_str()?;
+            if invocation != statement_run
+                || invocation.len() > 400
+                || !invocation
+                    .starts_with(&format!("https://github.com/{}/actions/runs/", policy.repo))
+                || cert["sourceRepositoryIdentifier"].as_str()
+                    != Some(policy.repository_id.as_str())
+                || cert["sourceRepositoryDigest"].as_str() != Some(policy.source_commit.as_str())
+                || !vr["statement"]["subject"]
+                    .as_array()
+                    .is_some_and(|subjects| {
+                        subjects.iter().any(|v| {
+                            v["name"].as_str() == Some(filename.as_str())
+                                && v["digest"]["sha256"].as_str() == Some(digest.as_str())
+                        })
+                    })
+            {
+                None
+            } else {
+                Some(invocation.to_owned())
+            }
+        })
+    });
     report.verdict = Verdict::Verified;
     report.reason = "SIGNED_ARTIFACT_PROVENANCE_AND_EXACT_IDENTITY_VERIFIED";
     report.signatures_cryptographically_verified_by_gh = true;

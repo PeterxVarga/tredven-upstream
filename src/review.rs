@@ -54,6 +54,18 @@ pub enum ScanInput {
         binary_sha256: String,
         allow_public_osv_network: bool,
     },
+    /// A GH-signed, workflow-authored receipt binds separately downloaded
+    /// scan JSON bytes and local Git source lockfile snapshots. The signer
+    /// repository is deliberately distinct from the scanned target repo.
+    SignedCiReceipt {
+        receipt: PathBuf,
+        baseline: PathBuf,
+        candidate: PathBuf,
+        scanned_repo: String,
+        scanner_version: String,
+        scanner_binary_sha256: String,
+        attestation: Box<Policy>,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -82,6 +94,7 @@ pub struct Report {
     pub source_remote_publisher_attested: bool,
     pub scanner_execution_cryptographically_attested: bool,
     pub all_artifact_signatures_verified: bool,
+    pub signed_ci_run: Option<crate::ci_receipt::CiReceiptEvidence>,
     pub public_osv_api_access_permitted: bool,
     pub performed_git_remote_queries: bool,
     pub performed_provider_mutations: bool,
@@ -134,6 +147,7 @@ pub struct ReviewOutput {
     pub candidate_json: Vec<u8>,
     pub baseline_lockfile: Option<Vec<u8>>,
     pub candidate_lockfile: Option<Vec<u8>>,
+    pub signed_ci_receipt: Option<Vec<u8>>,
 }
 impl ReviewOutput {
     pub fn save_evidence(&self, path: &Path) -> Result<(), String> {
@@ -192,6 +206,18 @@ impl ReviewOutput {
         }
         if let Some(bytes) = self.candidate_lockfile.as_ref() {
             entries.push(("candidate.Cargo.lock", bytes.as_slice()));
+        }
+        if let Some(bytes) = self.signed_ci_receipt.as_ref() {
+            if self
+                .report
+                .signed_ci_run
+                .as_ref()
+                .map(|x| x.receipt_sha256.as_str())
+                != Some(sha(bytes).as_str())
+            {
+                return Err("SIGNED_CI_RECEIPT_BYTES_NOT_QUALIFIED".into());
+            }
+            entries.push(("ci-run.receipt.json", bytes.as_slice()));
         }
         builder
             .create(path)
@@ -431,8 +457,39 @@ fn validate_config(config: &Config) -> Result<(), String> {
                 return Err("INVALID_EXISTING_REPORT_SUBJECT".into());
             }
         }
+        ScanInput::SignedCiReceipt {
+            scanned_repo,
+            scanner_version,
+            scanner_binary_sha256,
+            ..
+        } => {
+            if !valid_repo_pair(scanned_repo) {
+                return Err("INVALID_SIGNED_CI_SCANNED_REPOSITORY".into());
+            }
+            if scanner_version != "2.7.1" {
+                return Err("UNQUALIFIED_SIGNED_CI_SCANNER_VERSION".into());
+            }
+            if scanner_binary_sha256.len() != 64
+                || !scanner_binary_sha256.bytes().all(|b| b.is_ascii_hexdigit())
+            {
+                return Err("INVALID_SIGNED_CI_SCANNER_BINARY_DIGEST".into());
+            }
+        }
     }
     Ok(())
+}
+fn valid_repo_pair(s: &str) -> bool {
+    let mut parts = s.split('/');
+    let good = |s: &str| {
+        !s.is_empty()
+            && s.len() <= 100
+            && s != "."
+            && s != ".."
+            && !s.contains("..")
+            && s.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+    };
+    parts.next().is_some_and(good) && parts.next().is_some_and(good) && parts.next().is_none()
 }
 pub fn parse_config(raw: &[u8], base: &Path) -> Result<Config, String> {
     if raw.is_empty() || raw.len() > MAX_CONFIG as usize {
@@ -451,6 +508,23 @@ pub fn parse_config(raw: &[u8], base: &Path) -> Result<Config, String> {
     };
     match &mut config.scan {
         ScanInput::LocalOsvLockfile { binary, .. } => resolve(binary),
+        ScanInput::SignedCiReceipt {
+            receipt,
+            baseline,
+            candidate,
+            attestation,
+            ..
+        } => {
+            resolve(receipt);
+            resolve(baseline);
+            resolve(candidate);
+            for p in [&mut attestation.bundle, &mut attestation.trusted_root]
+                .into_iter()
+                .flatten()
+            {
+                resolve(p);
+            }
+        }
         ScanInput::ExistingReports {
             baseline,
             candidate,
@@ -491,6 +565,29 @@ pub fn review(config: Config) -> Result<ReviewOutput, String> {
         .candidate_commit
         .as_ref()
         .ok_or("CANDIDATE_GIT_COMMIT_NOT_OBSERVED")?;
+    if let ScanInput::SignedCiReceipt {
+        receipt,
+        baseline,
+        candidate,
+        scanned_repo,
+        scanner_version,
+        scanner_binary_sha256,
+        attestation,
+    } = &config.scan
+    {
+        return crate::ci_receipt::review_signed_ci(
+            &config.repo,
+            source,
+            &config.project,
+            receipt,
+            baseline,
+            candidate,
+            scanned_repo,
+            scanner_version,
+            scanner_binary_sha256,
+            attestation,
+        );
+    }
     let (
         scan_mode,
         format,
@@ -617,6 +714,7 @@ pub fn review(config: Config) -> Result<ReviewOutput, String> {
                 Some(cand_input),
             )
         }
+        ScanInput::SignedCiReceipt { .. } => unreachable!("signed CI handled by early branch"),
     };
     let baseline = scanner::inspect_scanner(&base_report, format, &subject);
     let candidate = scanner::inspect_scanner(&candidate_report, format, &subject);
@@ -688,6 +786,7 @@ pub fn review(config: Config) -> Result<ReviewOutput, String> {
         source_remote_publisher_attested: false,
         scanner_execution_cryptographically_attested: false,
         all_artifact_signatures_verified: signed,
+        signed_ci_run: None,
         public_osv_api_access_permitted: network_queries,
         performed_git_remote_queries: false,
         performed_provider_mutations: false,
@@ -701,6 +800,7 @@ pub fn review(config: Config) -> Result<ReviewOutput, String> {
         candidate_json: candidate_report,
         baseline_lockfile: base_lock_bytes,
         candidate_lockfile: candidate_lock_bytes,
+        signed_ci_receipt: None,
     })
 }
 

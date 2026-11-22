@@ -2,6 +2,7 @@
 //! Most modules are local-only. The explicit attestation module delegates signed provenance verification to the official GitHub CLI; it never grants release authority.
 
 pub mod attestation;
+pub mod ci_receipt;
 pub mod contract;
 pub mod delta;
 pub mod git_source;

@@ -163,6 +163,12 @@ fn public_signed_release_with_pinned_identity_is_verified_offline() {
     assert_eq!(r["repository_id"], REPO_ID);
     assert_eq!(r["signatures_cryptographically_verified_by_gh"], true);
     assert_eq!(r["online_attestation_lookup_requested"], false);
+    // This is an actual GH-verified SLSA Actions invocation, NOT a made-up
+    // run-id string. The R11 signed-receipt gate requires an exact match.
+    assert_eq!(
+        r["verified_workflow_run_uri"],
+        "https://github.com/attested-delivery/rust-template/actions/runs/27766057392/attempts/1"
+    );
     assert_eq!(r["scanner_execution_verified"], false);
     assert_eq!(r["production_ready"], false);
 }

@@ -231,6 +231,23 @@ cargo run --locked -- review-upgrade \
 
 The GitHub attestation verifier now **rejects gh older than 2.102.0** (patched signer/source-policy security advisories). An owner-isolated gh 2.105.0 verified the genuine signed public sample, without changing the system-installed gh. No private Tredven environment was scanned, no GitHub Action launched, and no releases or merges occurred. The signed **scanner-execution provenance** remains unproven, so this is an upgrade-review MVP, not production-safe upgrade automation. Details and reproduction: [R10 verification and open limitations](docs/R10_VERIFIED_UPGRADE_REVIEW_MVP.md).
 
+## R11 — Signed CI receipt verification and independent local install
+
+**New R11 input mode:** `review-upgrade` accepts `signed-ci-receipt` as an alternative to R10 local scans or existing reports. It verifies a **GitHub/Sigstore-attested CI run receipt** through the official patched `gh attestation verify`, binds that signed claim to the signer repository ID, workflow source SHA, exact GitHub Actions run ID/attempt, **two separately pinned scanned Git commits**, original Cargo.lock SHA-256 values, original OSV JSON bytes and actual scanner exit-status claims. Wrong hashes, refs, attestation, or incomplete scan evidence block. **The signed workflow claim is not independent proof of every subprocess execution or production safety.**
+
+```bash
+# After separately obtaining genuine signed CI evidence and an independently
+# trusted bundle/root: copy and configure the sample (placeholders fail closed).
+tredven-upstream review-upgrade \
+  --config /path/to/owner-reviewed-r11-config.json \
+  --format markdown \
+  --evidence-dir /path/to/NEW-private-receipts
+```
+
+The minimal starter configuration is [examples/r11-signed-ci-receipt.example.json](examples/r11-signed-ci-receipt.example.json). The owner-gated [manual GitHub Actions reference workflow](.github/workflows/r11-manual-public-osv-attest.yml) has **only `workflow_dispatch`**; it never triggers on push or PR and **was not run** as part of R11 development. When separately authorized, it reuses the existing Rust upgrade-review logic on **public-only** source commits and SHA-pinned OSV-Scanner, then signs the generated receipt with `actions/attest-build-provenance`. This needs explicit action execution and public attestation/upload approval (not included in the code-development permission).
+
+**Actually tested now:** two real local public OSV scans (81/97 packages; one persistent advisory, BLOCKED) and a locally assembled **unsigned** receipt with all byte/source hashes matching. The Rust verifier **blocked** that receipt because no matching real GitHub signature exists. Another public GitHub-signed binary was cryptographically verified with the patched `gh` 2.105.0, including its signed Actions run URI, but it is **not a signed scanner report**. This distinction is intentional. See [R11 E2E proof, competitor reuse, CI approvals and limitations](docs/R11_SIGNED_CI_UPGRADE_REVIEW.md).
+
 ## How the prototype decides
 
 | Input evidence | Decision | What it means |
