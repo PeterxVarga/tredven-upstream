@@ -369,9 +369,20 @@ fn reusable_json_policy_verifies_real_public_release_offline() {
     let Some(f) = fixture() else {
         return;
     };
-    let (artifact, _, _) = real_files(&f);
-    let policy = Path::new(env!("CARGO_MANIFEST_DIR"))
+    let (artifact, bundle, root) = real_files(&f);
+    // The checked-in JSON contains documentation-relative output/ paths.
+    // The optional genuine public fixture is explicitly provided by
+    // TREDVEN_R9_PUBLIC_FIXTURE_DIR and may live outside this Git worktree.
+    // Keep its exact signer/repository/source fields but qualify paths from
+    // the supplied fixture directory in a private, temporary policy copy.
+    let example = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("examples/r9-public-attestation-policy.example.json");
+    let mut parsed: Value = serde_json::from_slice(&fs::read(&example).unwrap()).unwrap();
+    parsed["bundle"] = Value::String(bundle.to_string_lossy().into_owned());
+    parsed["trusted_root"] = Value::String(root.to_string_lossy().into_owned());
+    let temp = Temp::new();
+    let policy = temp.root.join("r9-public-attestation-policy.json");
+    fs::write(&policy, serde_json::to_vec_pretty(&parsed).unwrap()).unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_tredven-upstream"))
         .args(["verify-attestation", "--artifact"])
         .arg(artifact)
