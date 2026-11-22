@@ -193,6 +193,7 @@ fn osv(value: &Value, subject: &str, report: &mut ScanSummary) {
     }
     let mut malformed = false;
     let mut mismatched = false;
+    let mut missing_source = false;
     let mut parsed_packages = 0usize;
     for result in results.iter().take(10000) {
         let path = result
@@ -202,7 +203,10 @@ fn osv(value: &Value, subject: &str, report: &mut ScanSummary) {
         match path {
             Some(p) if p == subject => {}
             Some(_) => mismatched = true,
-            None => malformed = true,
+            None => {
+                malformed = true;
+                missing_source = true;
+            }
         }
         let Some(packages) = array_at(result, "packages") else {
             malformed = true;
@@ -236,7 +240,11 @@ fn osv(value: &Value, subject: &str, report: &mut ScanSummary) {
     }
     if results.len() > 10000 {
         malformed = true;
+        missing_source = true;
     }
+    // The scope flag is independent from vulnerability/scan coverage.
+    // Every reported source must have the exact expected path.
+    report.expected_subject_matched = !mismatched && !missing_source;
     if mismatched {
         report.decision = ScanDecision::Blocked;
         report.reason = "SCANNER_TARGET_MISMATCH";
@@ -358,6 +366,22 @@ mod tests {
         let report = inspect_scanner(raw, ScannerFormat::OsvScannerJsonV2, "Cargo.lock");
         assert_eq!(report.decision, ScanDecision::Blocked);
         assert_eq!(report.vulnerability_occurrences, 1);
+    }
+    #[test]
+    fn osv_source_subject_flag_follows_actual_matching_scope() {
+        let ok = br#"{"results":[{"source":{"path":"Cargo.lock","type":"lockfile"},"packages":[{"package":{"name":"a","version":"1","ecosystem":"crates.io"}}]}]}"#;
+        let matched = inspect_scanner(ok, ScannerFormat::OsvScannerJsonV2, "Cargo.lock");
+        assert_eq!(matched.decision, ScanDecision::Review);
+        assert!(matched.expected_subject_matched);
+
+        let wrong = inspect_scanner(ok, ScannerFormat::OsvScannerJsonV2, "Other.lock");
+        assert_eq!(wrong.decision, ScanDecision::Blocked);
+        assert!(!wrong.expected_subject_matched);
+
+        let missing = br#"{"results":[{"source":{"type":"lockfile"},"packages":[{"package":{"name":"a","version":"1"}}]}]}"#;
+        let unknown = inspect_scanner(missing, ScannerFormat::OsvScannerJsonV2, "Cargo.lock");
+        assert_eq!(unknown.decision, ScanDecision::Unknown);
+        assert!(!unknown.expected_subject_matched);
     }
     #[test]
     fn osv_empty_and_no_packages_are_unknown() {
