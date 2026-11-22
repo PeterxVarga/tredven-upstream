@@ -166,6 +166,25 @@ source digest. Both paths **must fail** for an unsigned alpha candidate.
 Learn more about the separate owner gates and evidence levels in
 [R20 signed alpha qualification](docs/R20_OWNER_GATED_SIGNED_ALPHA.md).
 
+## R22 first-use cleanroom acceptance (developer test only)
+
+Before requesting public distribution, the read-only local Linux alpha path
+is now tested end-to-end in a **fresh Debian 12 container**: clone the public
+`sharkdp/fd` Git tags, explicitly download the pinned official
+OSV-Scanner binary into an empty cache, run the Tredven two-version report,
+compare findings with **two independent native OSV CLI scans**, and verify a
+repeated Tredven report's **semantic** decision without rewriting
+the original, variable-path scanner JSON. This is **not** a human usability
+test, and the **unsigned** local candidate must not be mistaken for an official
+GitHub Release.
+
+The tracked opt-in runner is `bash scripts/r22_cleanroom.sh --help`
+(which prints the complete required arguments and performs no network
+operation). See [the R22 acceptance report](docs/R22_FIRST_REAL_PRODUCT_VALUE_E2E.md)
+for the tested sample, exact source hashes, explicit network/unsigned-test
+consent flags, reproducible command and remaining release/independent-human
+gates.
+
 ## Run
 
 Requires a local Rust toolchain (1.100.0 pinned for contributors). The `inspect-git` command additionally requires an installed `git` executable and an existing local Git repository with named tags. Other toolchains may compile because the crate's minimum Rust version is 1.85.
