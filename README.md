@@ -171,6 +171,19 @@ Both reports must describe the *same, structurally comparable scanner scope*. Fo
 
 See [R7 decision, OSS alternatives and evidence limits](docs/R7_SCANNER_UPGRADE_DELTA.md). This is not a replacement for the existing [OSV-Scanner PR reporter](https://github.com/google/osv-scanner-action) or vulnerability triage platforms. No scanner execution, network calls, CI triggers, merge, release or deployment occur.
 
+## R8 — Offline local Rust release candidate (no publication)
+
+Build a **local, unsigned, byte-checkable** release candidate from a clean, committed Git source using the existing Rust toolchain and cached Cargo dependencies. This is a local packaging workflow, **not a GitHub release, signature or production-safe grant**.
+
+```bash
+# Run from this repository with Rust 1.100.0 and Python 3.11+ available:
+python3 -I -B scripts/test_release_candidate.py
+python3 -I -B scripts/release_candidate.py build --out output/r8-local-candidate
+python3 -I -B scripts/release_candidate.py verify --dir output/r8-local-candidate
+```
+
+Requires an **already clean Git commit**, uses Cargo `--offline --locked`, runs fmt/Clippy/all-target tests, builds the optimized Linux binary, and verifies the Cargo source package before packaging. Creates four ignored local files: binary+license+README `.tar.gz`, `.crate` source archive, checksums and a machine-readable source/build manifest. The verifier checks the **exact files, hashes and bounded archive member metadata**, not signature authenticity, GitHub publisher identity or scanner provenance. It will not overwrite an existing candidate. No GitHub Actions workflows, tags or releases are created. The binary is tested only on the machine used to build it. See [R8 exact limitations and acceptance](docs/R8_OFFLINE_RELEASE_CANDIDATE.md).
+
 ## How the prototype decides
 
 | Input evidence | Decision | What it means |

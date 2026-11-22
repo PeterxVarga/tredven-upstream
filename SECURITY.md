@@ -38,6 +38,13 @@
 - Scanner JSON files can contain real secrets, credentials and internal path names. The program never sends scanner files over the network, runs the scanner or prints finding descriptions/secret match bytes, and limits examples to 20 sanitized IDs. It can expose package/advisory names and local Git paths: **do not publicly share private reports**.
 - A scanner's own suppressed or incomplete findings, stale vulnerability database, changed scan flags, hidden aliases and lack of independent signed attestation are **not** solved by the diff. Use the original vendor tools for actual vulnerability analysis and production policy.
 
+## R8 local release receipt: integrity is not authenticity
+
+- `scripts/release_candidate.py build` requires a clean Git commit, pinned local Rust toolchain, offline Cargo cache, fmt/Clippy/tests/optimized build and `cargo package`. Outputs are only created inside locally ignored `output/`; never automatically uploaded, published or deployed.
+- `verify` checks a local checksum list, fixed SHA256 manifests, normalized archive metadata and bounded regular-file scope. **An attacker who can alter all files can also recompute the checksums**. Neither the checksum list, user-supplied source commit nor self-authored manifest is an independently signed attestation or publisher proof.
+- Every receipt explicitly states no signature, scanner execution attestation, production readiness, publication or deployment authorization. If signed evidence is needed, use upstream GitHub/Sigstore verification **with issuer/repository identity constraints**, not this local integrity verifier as a trust root.
+- Candidate files are not a promise of cross-host reproducible binaries or a release ready for arbitrary Linux distributions. No CI token, GitHub release, crates.io publication or secret is required or used.
+
 ## Report vulnerabilities
 
 Use GitHub's private vulnerability reporting if enabled, or contact the project maintainers through the repository's security reporting channel. Do not publicly post exploit payloads with real user data.
