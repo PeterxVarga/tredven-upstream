@@ -13,6 +13,7 @@
 - Consume explicit check results (`passed`, `failed`, `not_run`, `unknown`); list at most 25 paths prioritized for **human review**, not semantic breakage certification.
 - One **release-specific, source-pinned** SQL/Drizzle contract checks foreign-key parent columns in the *Git-committed baseline schema* without running the SQL.
 - Fail closed: `BLOCKED` for failed checks and contradictory source claims, `REVIEW` for a declared version movement that needs human qualification, `UNKNOWN` for missing evidence.
+- Opt-in multi-project watch plans now combine local Git source changes with externally produced CI/security/backup/rollback evidence in one review report. **Caller-supplied check statuses are not independently verified.**
 - All patch/merge/deploy/send/provider-write/payment/release authority flags are **always false**.
 - Stable, input-bounded, portable source with no runtime network calls or background process.
 
@@ -76,6 +77,25 @@ Example (unverified JSON report excerpt):
 ```
 
 There is **no telemetry or required cloud account**. For `inspect`, any `source_verified: true` field is *caller asserted*. For `inspect-git` and `inspect-contract`, the report source origin is `LOCAL_GIT_OBJECTS_REMOTE_UNATTESTED`. The R3 contract also records whether the checked schema is the Git baseline or an unverified caller-supplied fixture. None of these paths verifies a remote publisher, deployed database, migration execution, rollback or business correctness.
+
+## Read-only upgrade watch plans (R5)
+
+We reuse **Renovate/Diun/Drydock-style workflows**, not their code or privileged actions. Existing tools continue to discover versions, create PRs, scan vulnerabilities and run tests. The Rust CLI now composes a **declarative, explicitly enabled** watchlist with source-bound test artifact references.
+
+```bash
+# A deliberately disabled sample; exits 3 because no targets are enabled.
+cargo run --locked -- inspect-plan \
+  --manifest examples/watch-plan.json \
+  --format markdown
+```
+
+To inspect real sources, edit a copy of the example: set `enabled: true`, provide an existing **local** Git repo and two real tags. For each declared required check, record its `source_tool`, `status` and, when claiming `passed`, both the exact **candidate commit ID** and an existing local evidence artifact with its SHA-256 digest. The command reads the file but does **not** run OSV-Scanner, Trivy, CI, Renovate, Docker, backups or the source code.
+
+- **BLOCKED / exit 2:** declared failure, artifact digest mismatch, or evidence bound to the wrong target commit.
+- **UNKNOWN / exit 3:** source missing, check not run, declared PASS without an intact artifact or exact commit binding, or no opted-in targets.
+- **REVIEW / exit 0:** declared evidence is present for the opted-in targets, **not** proof that it is correct, complete or safe to deploy.
+
+The output includes a per-group summary and explicit provenance/unknowns. An artifact hash verifies **bytes only**, not that a scanner actually ran or its findings are true. No state ever grants deployment authority or a verified green production approval. [R5 design, OSS source comparison, limits and acceptance](docs/R5_OSS_WORKFLOW_ADOPTION.md).
 
 ## How the prototype decides
 

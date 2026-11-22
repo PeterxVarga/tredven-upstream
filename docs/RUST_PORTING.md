@@ -43,3 +43,7 @@ Do not create a second production authority or import Tredven customer data into
 ## R3 source contract proof
 
 A narrow Rust OpenSEO v0.1.31 Stripe Projects 0049 rule detects whether two foreign-key parent columns match the pinned baseline Drizzle source schema; it blocks synthetic malformed inputs. This is not whole adapter equivalence or a real database migration. See [R3 qualification](R3_OPEN_SEO_STRIPE_CONTRACT.md).
+
+## R5 OSS workflow reuse
+
+An opt-in, local-only multi-target watch plan now combines exact Git tag changes with user-declared, byte-bound CI, scanner and rollback receipts. This is an adapter *input contract*, not a scanner integration or proof of release safety. See [R5 adoption analysis](R5_OSS_WORKFLOW_ADOPTION.md).

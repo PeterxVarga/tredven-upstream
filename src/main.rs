@@ -16,6 +16,7 @@ fn usage() -> &'static str {
      Usage: tredven-upstream inspect --input FILE|--stdin [--format json|markdown]\n\
      Usage: tredven-upstream inspect-git --repo DIR --project ID --from TAG --to TAG [--format json|markdown]\n\
      Usage: tredven-upstream inspect-contract --repo DIR --project open-seo --profile open-seo-v0.1.31-stripe-projects-0049 [--schema-snapshot FILE] [--format json|markdown]\n\
+     Usage: tredven-upstream inspect-plan --manifest FILE [--format json|markdown]\n\
      Git inspection is local only, never a remote release or production attestation.\n\
      No network, Docker, provider credentials, mutations or deploy permissions.\n"
 }
@@ -123,6 +124,69 @@ fn run_contract(mut args: impl Iterator<Item = String>) -> Result<u8, String> {
     emit(&report, &format)
 }
 
+fn run_plan(mut args: impl Iterator<Item = String>) -> Result<u8, String> {
+    let mut manifest = None;
+    let mut format = "json".to_owned();
+    let mut format_seen = false;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--manifest" => {
+                if manifest.is_some() {
+                    return Err("DUPLICATE_PLAN_MANIFEST".into());
+                }
+                manifest = Some(args.next().ok_or("MISSING_PLAN_MANIFEST_VALUE")?);
+            }
+            "--format" => {
+                if format_seen {
+                    return Err("DUPLICATE_PLAN_FORMAT".into());
+                }
+                format_seen = true;
+                format = args.next().ok_or("MISSING_PLAN_FORMAT_VALUE")?;
+            }
+            "--help" | "-h" => {
+                print!("{}", usage());
+                return Ok(0);
+            }
+            _ => return Err("UNRECOGNIZED_PLAN_ARGUMENT".into()),
+        }
+    }
+    if format != "json" && format != "markdown" {
+        return Err("UNSUPPORTED_FORMAT".into());
+    }
+    let path = manifest.ok_or("MISSING_PLAN_MANIFEST")?;
+    let path = Path::new(&path);
+    let meta = fs::symlink_metadata(path).map_err(|_| "PLAN_MANIFEST_UNAVAILABLE")?;
+    if !meta.file_type().is_file() || meta.len() > 512 * 1024 {
+        return Err("PLAN_MANIFEST_NOT_BOUNDED_REGULAR_FILE".into());
+    }
+    let raw = fs::read(path).map_err(|_| "PLAN_MANIFEST_READ_FAILED")?;
+    if raw.len() > 512 * 1024 {
+        return Err("PLAN_MANIFEST_TOO_LARGE".into());
+    }
+    let input: tredven_upstream::plan::WatchPlan =
+        serde_json::from_slice(&raw).map_err(|_| "INVALID_PLAN_JSON")?;
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let report = tredven_upstream::plan::inspect_plan(input, parent)?;
+    let mut stdout = io::stdout().lock();
+    if format == "json" {
+        serde_json::to_writer_pretty(&mut stdout, &report)
+            .map_err(|_| "PLAN_JSON_OUTPUT_FAILED")?;
+        writeln!(&mut stdout).map_err(|_| "STDOUT_WRITE_FAILED")?;
+    } else {
+        write!(&mut stdout, "{}", tredven_upstream::plan::markdown(&report))
+            .map_err(|_| "PLAN_MARKDOWN_OUTPUT_FAILED")?;
+    }
+    // Exit zero only means all declared watched upgrades merit further REVIEW.
+    // It never authorizes an upgrade. Unknown = 3; blocked = 2.
+    Ok(if report.total_blocked > 0 {
+        2
+    } else if report.total_unknown > 0 || report.total_watched == 0 {
+        3
+    } else {
+        0
+    })
+}
+
 fn run() -> Result<u8, String> {
     let mut args = env::args().skip(1);
     match args.next().as_deref() {
@@ -132,6 +196,7 @@ fn run() -> Result<u8, String> {
         }
         Some("inspect") => {}
         Some("inspect-git") => return run_git(args),
+        Some("inspect-plan") => return run_plan(args),
         Some("inspect-contract") => return run_contract(args),
         _ => return Err(usage().trim_end().into()),
     };

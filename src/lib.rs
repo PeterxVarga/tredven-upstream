@@ -3,6 +3,7 @@
 
 pub mod contract;
 pub mod git_source;
+pub mod plan;
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

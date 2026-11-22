@@ -14,6 +14,14 @@
 - `BLOCKED` means stop and inspect. `REVIEW` and `UNKNOWN` also do not mean safe to deploy.
 - Exit code 0 means the CLI ran successfully, **not that an upgrade is authorized**.
 
+## Watch-plan trust model
+
+- `inspect-plan` accepts bounded JSON, **opts out by default**, and reads only local Git objects and user-selected external evidence files. It never runs the named CI/scanner or performs image checks, network calls, backups or deploys.
+- Each declared PASS requires an SHA-256-matching local artifact and a candidate commit matching the inspected local Git tag. This is **not** independent evidence that the scanner ran, the result is fresh, the remote publisher is authentic or the release is safe. A source-specific artifact can be forged together with its digest.
+- A failed check or tampered artifact blocks the selected target. Missing checks or absent proof remain UNKNOWN. Even all declared gates satisfied produces REVIEW, not authorization.
+- Source paths and input artifact paths are read-only, and the tool does not print raw artifact contents. However, users should keep internal Git receipts and reports private; malformed or adversarial local source trees are not a substitute for an OS sandbox.
+- Do not wire this prototype to automatic production deployment or a privileged long-lived GitHub Actions runner.
+
 ## Report vulnerabilities
 
 Use GitHub's private vulnerability reporting if enabled, or contact the project maintainers through the repository's security reporting channel. Do not publicly post exploit payloads with real user data.
