@@ -6,6 +6,7 @@ pub mod ci_receipt;
 pub mod contract;
 pub mod delta;
 pub mod git_source;
+pub mod lockfile;
 pub mod osv_bootstrap;
 pub mod plan;
 pub mod review;
@@ -160,22 +161,59 @@ pub fn classify_path(path: &str) -> &'static str {
     .any(|keyword| lower.contains(keyword))
     {
         "WORKER_OR_SEND_SURFACE"
+    // Classify dependency files before directory heuristics such as "api/",
+    // so a Python/Node lockfile under services/api/ is not misidentified
+    // as an API contract. This is a review hint, never a safety certificate.
+    } else if [
+        "go.mod",
+        "go.sum",
+        "package.json",
+        "package-lock.json",
+        "pnpm-lock.yaml",
+        "yarn.lock",
+        "bun.lock",
+        "cargo.lock",
+        "cargo.toml",
+        "requirements.txt",
+        "poetry.lock",
+        "pipfile.lock",
+        "pdm.lock",
+        "uv.lock",
+        "pylock.toml",
+        "pyproject.toml",
+        "pom.xml",
+        "gradle.lockfile",
+        "buildscript-gradle.lockfile",
+        "composer.lock",
+        "composer.json",
+        "gemfile.lock",
+        "gemfile",
+        "packages.lock.json",
+        "packages.config",
+        "deps.json",
+        "conan.lock",
+        "pubspec.lock",
+        "package_config.json",
+        "mix.lock",
+        "renv.lock",
+        "cabal.project.freeze",
+        "stack.yaml.lock",
+    ]
+    .iter()
+    .any(|name| lower == *name || lower.ends_with(&format!("/{name}")))
+        || lower.ends_with(".csproj")
+        || lower.ends_with(".gradle")
+        || lower.ends_with(".gradle.kts")
+    {
+        "DEPLOY_OR_DEPENDENCY"
     } else if ["api/", "handler", "route", "openapi", "mcp", "tool"]
         .iter()
         .any(|keyword| lower.contains(keyword))
     {
         "API_OR_CONTRACT"
-    } else if [
-        "go.mod",
-        "go.sum",
-        "package.json",
-        "docker",
-        "compose",
-        "deploy",
-        ".github/",
-    ]
-    .iter()
-    .any(|keyword| lower.contains(keyword))
+    } else if ["docker", "compose", "deploy", ".github/"]
+        .iter()
+        .any(|keyword| lower.contains(keyword))
     {
         "DEPLOY_OR_DEPENDENCY"
     } else {
@@ -469,6 +507,20 @@ mod tests {
         );
         assert_eq!(classify_path("app/api/status/route.ts"), "API_OR_CONTRACT");
         assert_eq!(classify_path("Dockerfile"), "DEPLOY_OR_DEPENDENCY");
+        for path in [
+            "Cargo.lock",
+            "frontend/package-lock.json",
+            "go.mod",
+            "services/api/requirements.txt",
+            "services/api/poetry.lock",
+            "services/go/go.sum",
+            "pom.xml",
+            "composer.lock",
+            "lib/project.csproj",
+            "build.gradle.kts",
+        ] {
+            assert_eq!(classify_path(path), "DEPLOY_OR_DEPENDENCY", "{path}");
+        }
         assert_eq!(classify_path("README.md"), "OTHER");
     }
 

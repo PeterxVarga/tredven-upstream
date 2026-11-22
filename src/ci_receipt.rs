@@ -262,6 +262,7 @@ pub fn review_signed_ci(
         project: project.to_owned(),
         source,
         scan_mode: "signed-ci-receipt",
+        analyzed_lockfile: Some("Cargo.lock".into()),
         scanner_binary_sha256: Some(scanner_binary_sha256.to_owned()),
         baseline: Evidence {
             report_sha256: sha(&baseline_bytes),

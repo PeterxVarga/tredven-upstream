@@ -21,7 +21,7 @@ fn usage() -> &'static str {
      Usage: tredven-upstream inspect-upgrade --repo DIR --project ID --from TAG --to TAG --scanner trivy-json-v2|osv-scanner-json-v2 --scan-report FILE --subject TARGET --scan-commit SHA [--format json|markdown]\n\
      Usage: tredven-upstream inspect-delta --baseline FILE --candidate FILE --scanner trivy-json-v2|osv-scanner-json-v2 --subject TARGET [--format json|markdown]\n\
      Usage: tredven-upstream inspect-upgrade-delta --repo DIR --project ID --from TAG --to TAG --baseline FILE --candidate FILE --scanner trivy-json-v2|osv-scanner-json-v2 --subject TARGET --baseline-commit SHA --candidate-commit SHA [--format json|markdown]\n\
-     Usage: tredven-upstream review-local --repo DIR --from TAG --to TAG (--install-pinned-osv | --osv-bin FILE --osv-sha256 HEX) --allow-public-osv-network [--project ID] [--format json|markdown] [--evidence-dir NEW_DIRECTORY]\n\
+     Usage: tredven-upstream review-local --repo DIR --from TAG --to TAG (--install-pinned-osv | --osv-bin FILE --osv-sha256 HEX) --allow-public-osv-network [--project ID] [--lockfile RELATIVE_PATH] [--format json|markdown] [--evidence-dir NEW_DIRECTORY]\n\
      Usage: tredven-upstream review-upgrade --config FILE [--format json|markdown] [--evidence-dir NEW_DIRECTORY]\n\
      Usage: tredven-upstream verify-attestation --artifact FILE --repo OWNER/REPO --repo-id NUM --signer-workflow OWNER/REPO/.github/workflows/NAME.yml --source-ref refs/tags/TAG --source-commit SHA --bundle FILE --trusted-root FILE [--predicate-type URL] [--format json|markdown]\n\
      Shortcut: tredven-upstream verify-attestation --artifact FILE --policy POLICY.json [--format json|markdown]\n\
@@ -754,7 +754,7 @@ fn run_attestation(mut args: impl Iterator<Item = String>, scan_mode: bool) -> R
 fn run_local_review(mut args: impl Iterator<Item = String>) -> Result<u8, String> {
     let (mut repo, mut project, mut from, mut to, mut bin, mut sha) =
         (None, None, None, None, None, None);
-    let (mut format, mut evidence) = (None, None);
+    let (mut format, mut evidence, mut lockfile) = (None, None, None);
     let mut network = false;
     let mut install_pinned_osv = false;
     while let Some(arg) = args.next() {
@@ -786,6 +786,7 @@ fn run_local_review(mut args: impl Iterator<Item = String>) -> Result<u8, String
             "--osv-sha256" => &mut sha,
             "--format" => &mut format,
             "--evidence-dir" => &mut evidence,
+            "--lockfile" => &mut lockfile,
             _ => return Err("UNRECOGNIZED_LOCAL_REVIEW_OPTION".into()),
         };
         if dest.replace(value).is_some() {
@@ -804,12 +805,27 @@ fn run_local_review(mut args: impl Iterator<Item = String>) -> Result<u8, String
     let from = from.ok_or("MISSING_LOCAL_REVIEW_FROM")?;
     let to = to.ok_or("MISSING_LOCAL_REVIEW_TO")?;
     let project = project.unwrap_or_else(|| "local-upgrade".into());
+    // Choose/validate one lockfile from *both* pinned Git commits before
+    // any optional upstream download or scanner execution.
+    let source =
+        tredven_upstream::git_source::inspect_local_git(Path::new(&repo), &project, &from, &to)?;
+    let selected = tredven_upstream::lockfile::select(
+        Path::new(&repo),
+        source
+            .baseline_commit
+            .as_deref()
+            .ok_or("BASELINE_GIT_COMMIT_NOT_OBSERVED")?,
+        source
+            .candidate_commit
+            .as_deref()
+            .ok_or("CANDIDATE_GIT_COMMIT_NOT_OBSERVED")?,
+        lockfile.as_deref(),
+    )?;
     let (bin, sha) = if install_pinned_osv {
         if bin.is_some() || sha.is_some() {
             return Err("PINNED_OSV_INSTALL_CONFLICTS_WITH_MANUAL_SCANNER".into());
         }
-        // Never fetch or execute a scanner for an unresolvable local Git pair.
-        tredven_upstream::git_source::inspect_local_git(Path::new(&repo), &project, &from, &to)?;
+        // No download until both commits and the chosen lockfile qualify.
         let (path, sha) = tredven_upstream::osv_bootstrap::ensure_pinned()?;
         (path.to_string_lossy().into_owned(), sha.to_owned())
     } else {
@@ -828,7 +844,7 @@ fn run_local_review(mut args: impl Iterator<Item = String>) -> Result<u8, String
         "candidate_tag": to,
         "scan": {
             "mode": "local-osv-lockfile",
-            "lockfile": "Cargo.lock",
+            "lockfile": selected,
             "binary": bin,
             "binary_sha256": sha,
             "allow_public_osv_network": true
