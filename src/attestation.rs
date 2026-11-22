@@ -218,6 +218,40 @@ fn expected_san(p: &Policy) -> String {
     format!("https://github.com/{}@{}", p.signer_workflow, p.source_ref)
 }
 
+/// Shared post-crypto policy matcher. An external caller must first verify
+/// the original response with the official gh CLI; this checks identity only.
+/// Certificate, timestamp, and subject must match in the SAME record.
+fn verified_record_matches(item: &Value, p: &Policy, digest: &str, filename: &str) -> bool {
+    let vr = &item["verificationResult"];
+    let cert = &vr["signature"]["certificate"];
+    let same_string = |key: &str, want: &str| cert[key].as_str() == Some(want);
+    if !same_string(
+        "sourceRepositoryURI",
+        &format!("https://github.com/{}", p.repo),
+    ) || !same_string("githubWorkflowRepository", &p.repo)
+        || !same_string("sourceRepositoryIdentifier", &p.repository_id)
+        || !same_string("sourceRepositoryRef", &p.source_ref)
+        || !same_string("sourceRepositoryDigest", &p.source_commit)
+        || !same_string("subjectAlternativeName", &expected_san(p))
+        || !same_string("buildSignerURI", &expected_san(p))
+        || !same_string("runnerEnvironment", "github-hosted")
+        || vr["statement"]["predicateType"].as_str() != Some(&p.predicate_type)
+        || !vr["verifiedTimestamps"]
+            .as_array()
+            .is_some_and(|a| !a.is_empty())
+    {
+        return false;
+    }
+    vr["statement"]["subject"]
+        .as_array()
+        .is_some_and(|subjects| {
+            subjects.iter().any(|subject| {
+                subject["name"].as_str() == Some(filename)
+                    && subject["digest"]["sha256"].as_str() == Some(digest)
+            })
+        })
+}
+
 /// Interpret ONLY JSON that the official gh CLI reports **after** successful
 /// cryptographic verification; never call this on arbitrary upstream JSON.
 fn verified_fields_match(output: &[u8], p: &Policy, digest: &str, filename: &str) -> bool {
@@ -227,43 +261,40 @@ fn verified_fields_match(output: &[u8], p: &Policy, digest: &str, filename: &str
     let Some(records) = value.as_array() else {
         return false;
     };
-    if records.is_empty() || records.len() > 8 {
-        return false;
-    }
-    for item in records {
-        let vr = &item["verificationResult"];
-        let cert = &vr["signature"]["certificate"];
-        let same_string = |key: &str, want: &str| cert[key].as_str() == Some(want);
-        if !same_string(
-            "sourceRepositoryURI",
-            &format!("https://github.com/{}", p.repo),
-        ) || !same_string("githubWorkflowRepository", &p.repo)
-            || !same_string("sourceRepositoryIdentifier", &p.repository_id)
-            || !same_string("sourceRepositoryRef", &p.source_ref)
-            || !same_string("sourceRepositoryDigest", &p.source_commit)
-            || !same_string("subjectAlternativeName", &expected_san(p))
-            || !same_string("buildSignerURI", &expected_san(p))
-            || !same_string("runnerEnvironment", "github-hosted")
-            || vr["statement"]["predicateType"].as_str() != Some(&p.predicate_type)
-            || !vr["verifiedTimestamps"]
-                .as_array()
-                .is_some_and(|a| !a.is_empty())
-        {
-            continue;
-        }
-        if vr["statement"]["subject"]
-            .as_array()
-            .is_some_and(|subjects| {
-                subjects.iter().any(|s| {
-                    s["name"].as_str() == Some(filename)
-                        && s["digest"]["sha256"].as_str() == Some(digest)
-                })
-            })
-        {
-            return true;
-        }
-    }
-    false
+    !records.is_empty()
+        && records.len() <= 8
+        && records
+            .iter()
+            .any(|item| verified_record_matches(item, p, digest, filename))
+}
+
+fn run_uri_from_verified_json(
+    parsed: &Value,
+    policy: &Policy,
+    digest: &str,
+    filename: &str,
+) -> Option<String> {
+    parsed.as_array().and_then(|records| {
+        records.iter().find_map(|item| {
+            if !verified_record_matches(item, policy, digest, filename) {
+                return None;
+            }
+            let vr = &item["verificationResult"];
+            let cert = &vr["signature"]["certificate"];
+            let invocation = cert["runInvocationURI"].as_str()?;
+            let statement_run =
+                vr["statement"]["predicate"]["runDetails"]["metadata"]["invocationId"].as_str()?;
+            if invocation != statement_run
+                || invocation.len() > 400
+                || !invocation
+                    .starts_with(&format!("https://github.com/{}/actions/runs/", policy.repo))
+            {
+                None
+            } else {
+                Some(invocation.to_owned())
+            }
+        })
+    })
 }
 
 /// Require a GH CLI version with fixed attestation signer/ref policy bugs.
@@ -463,35 +494,8 @@ pub fn verify_artifact(path: &Path, policy: &Policy) -> Report {
             return report;
         }
     };
-    report.verified_workflow_run_uri = parsed.as_array().and_then(|records| {
-        records.iter().find_map(|item| {
-            let vr = &item["verificationResult"];
-            let cert = &vr["signature"]["certificate"];
-            let invocation = cert["runInvocationURI"].as_str()?;
-            let statement_run =
-                vr["statement"]["predicate"]["runDetails"]["metadata"]["invocationId"].as_str()?;
-            if invocation != statement_run
-                || invocation.len() > 400
-                || !invocation
-                    .starts_with(&format!("https://github.com/{}/actions/runs/", policy.repo))
-                || cert["sourceRepositoryIdentifier"].as_str()
-                    != Some(policy.repository_id.as_str())
-                || cert["sourceRepositoryDigest"].as_str() != Some(policy.source_commit.as_str())
-                || !vr["statement"]["subject"]
-                    .as_array()
-                    .is_some_and(|subjects| {
-                        subjects.iter().any(|v| {
-                            v["name"].as_str() == Some(filename.as_str())
-                                && v["digest"]["sha256"].as_str() == Some(digest.as_str())
-                        })
-                    })
-            {
-                None
-            } else {
-                Some(invocation.to_owned())
-            }
-        })
-    });
+    report.verified_workflow_run_uri =
+        run_uri_from_verified_json(&parsed, policy, &digest, &filename);
     report.verdict = Verdict::Verified;
     report.reason = "SIGNED_ARTIFACT_PROVENANCE_AND_EXACT_IDENTITY_VERIFIED";
     report.signatures_cryptographically_verified_by_gh = true;
@@ -636,6 +640,48 @@ mod tests {
             &"b".repeat(64),
             "test.bin"
         ));
+    }
+    #[test]
+    fn run_uri_must_not_be_borrowed_from_a_different_verification_record() {
+        let policy = p();
+        let good = synthetic_verified_record(&policy)[0].clone();
+        let mut wrong_signer = good.clone();
+        let uri = "https://github.com/demo/rust/actions/runs/77/attempts/1";
+        wrong_signer["verificationResult"]["signature"]["certificate"]["runInvocationURI"] =
+            serde_json::json!(uri);
+        wrong_signer["verificationResult"]["statement"]["predicate"]["runDetails"]["metadata"]["invocationId"] =
+            serde_json::json!(uri);
+        wrong_signer["verificationResult"]["signature"]["certificate"]["subjectAlternativeName"] =
+            serde_json::json!("https://github.com/other/repo");
+
+        let mixed = serde_json::json!([good, wrong_signer]);
+        let encoded = serde_json::to_vec(&mixed).unwrap();
+        assert!(verified_fields_match(
+            &encoded,
+            &policy,
+            &"b".repeat(64),
+            "test.bin"
+        ));
+        // The first record has no run URI; the second has a different signer.
+        // A verifier must NEVER join their independent claims.
+        assert_eq!(
+            run_uri_from_verified_json(&mixed, &policy, &"b".repeat(64), "test.bin"),
+            None
+        );
+    }
+    #[test]
+    fn valid_run_uri_is_selected_from_its_own_fully_matching_record() {
+        let policy = p();
+        let mut good = synthetic_verified_record(&policy);
+        let uri = "https://github.com/demo/rust/actions/runs/77/attempts/1";
+        good[0]["verificationResult"]["signature"]["certificate"]["runInvocationURI"] =
+            serde_json::json!(uri);
+        good[0]["verificationResult"]["statement"]["predicate"]["runDetails"]["metadata"]["invocationId"] =
+            serde_json::json!(uri);
+        assert_eq!(
+            run_uri_from_verified_json(&good, &policy, &"b".repeat(64), "test.bin"),
+            Some(uri.to_owned())
+        );
     }
     #[test]
     fn pure_json_is_not_an_attestation_verifier() {
