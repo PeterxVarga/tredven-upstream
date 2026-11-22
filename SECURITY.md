@@ -45,6 +45,15 @@
 - Every receipt explicitly states no signature, scanner execution attestation, production readiness, publication or deployment authorization. If signed evidence is needed, use upstream GitHub/Sigstore verification **with issuer/repository identity constraints**, not this local integrity verifier as a trust root.
 - Candidate files are not a promise of cross-host reproducible binaries or a release ready for arbitrary Linux distributions. No CI token, GitHub release, crates.io publication or secret is required or used.
 
+## R9 GitHub/Sigstore verifier trust boundaries
+
+- `verify-attestation` and `inspect-attested-scan` call the **installed official `gh` binary** as an external verifier and inspect its *cryptographically verified* JSON certificate results. Rust does **not** implement any new DSSE/X.509, Sigstore, Rekor or TUF cryptographic verifier. The executable found as `gh` in the operator PATH is part of the trusted computing base.
+- Identity is **strictly pinned** by operator-supplied expected GitHub `owner/repo`, immutable repository ID, exact signer workflow path, source Git ref and 40-hex commit SHA. The program also requires the signed statement's subject filename and SHA-256 to match the actual local file, a verified timestamp and a GitHub-hosted runner. Name-only or owner-only validation is insufficient for trusted unattended updates.
+- **Offline is the default.** A local signed bundle and custom trusted root must both exist; missing trust data BLOCKS rather than performing a network fallback. An offline custom root is **caller-supplied and must be independently trusted**. The logged root/bundle SHA-256 values prove bytes only, not authenticity of the root. With explicit `--online`, `gh` uses its own built-in trust policy for public read-only GitHub API attestation lookup.
+- An artifact filename/bytes change after verification, a wrong issuer/repository/workflow/ref/SHA, an unattested file, malformed output or altered bundle/root fails closed. The Rust CLI does not execute the downloaded artifact, run scanner binaries, fetch Git code or access private services.
+- The dedicated scanner composition `inspect-attested-scan` first requires verified artifact origin, then validates the scanner report bytes against the verified artifact SHA-256 before parsing. Even a truly signed Trivy/OSV JSON **does not prove its actual scanner execution or complete coverage**; a clean report remains REVIEW only. The public tested fixture is a signed **binary**, so its scanner result is UNKNOWN.
+- The R8 local release candidate is **not signed** by this change. No GitHub Actions CI, GitHub Release, crates.io publication, deployment, production data or privileged self-hosted runner is authorized.
+
 ## Report vulnerabilities
 
 Use GitHub's private vulnerability reporting if enabled, or contact the project maintainers through the repository's security reporting channel. Do not publicly post exploit payloads with real user data.

@@ -1,6 +1,7 @@
-//! Deterministic, side-effect-free upgrade evidence evaluation.
-//! This crate never connects to a host, invokes a shell, or grants release authority.
+//! Upgrade evidence evaluation with explicit, read-only GitHub CLI attestation verification.
+//! Most modules are local-only. The explicit attestation module delegates signed provenance verification to the official GitHub CLI; it never grants release authority.
 
+pub mod attestation;
 pub mod contract;
 pub mod delta;
 pub mod git_source;

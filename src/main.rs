@@ -21,8 +21,12 @@ fn usage() -> &'static str {
      Usage: tredven-upstream inspect-upgrade --repo DIR --project ID --from TAG --to TAG --scanner trivy-json-v2|osv-scanner-json-v2 --scan-report FILE --subject TARGET --scan-commit SHA [--format json|markdown]\n\
      Usage: tredven-upstream inspect-delta --baseline FILE --candidate FILE --scanner trivy-json-v2|osv-scanner-json-v2 --subject TARGET [--format json|markdown]\n\
      Usage: tredven-upstream inspect-upgrade-delta --repo DIR --project ID --from TAG --to TAG --baseline FILE --candidate FILE --scanner trivy-json-v2|osv-scanner-json-v2 --subject TARGET --baseline-commit SHA --candidate-commit SHA [--format json|markdown]\n\
+     Usage: tredven-upstream verify-attestation --artifact FILE --repo OWNER/REPO --repo-id NUM --signer-workflow OWNER/REPO/.github/workflows/NAME.yml --source-ref refs/tags/TAG --source-commit SHA --bundle FILE --trusted-root FILE [--predicate-type URL] [--format json|markdown]\n\
+     Shortcut: tredven-upstream verify-attestation --artifact FILE --policy POLICY.json [--format json|markdown]\n\
+     Usage: tredven-upstream inspect-attested-scan --artifact REPORT.json --scanner trivy-json-v2|osv-scanner-json-v2 --subject TARGET --repo OWNER/REPO --repo-id NUM --signer-workflow OWNER/REPO/.github/workflows/NAME.yml --source-ref refs/tags/TAG --source-commit SHA --bundle FILE --trusted-root FILE [--format json|markdown]\n\
+     Alternative: same verify-attestation arguments with --online instead of --bundle/--trusted-root (explicitly enables GitHub API lookups).\n\
      Git inspection is local only, never a remote release or production attestation.\n\
-     No network, Docker, provider credentials, mutations or deploy permissions.\n"
+     No Docker, provider writes, mutations or deploy permissions. Only attestation commands with --online request public GitHub API lookups.\n"
 }
 
 fn fail(message: &str) -> ExitCode {
@@ -533,6 +537,216 @@ fn run_delta(mut args: impl Iterator<Item = String>, with_git: bool) -> Result<u
     Ok(delta_exit(decision))
 }
 
+fn run_attestation(mut args: impl Iterator<Item = String>, scan_mode: bool) -> Result<u8, String> {
+    use tredven_upstream::attestation::{Policy, Verdict, verify_artifact};
+    let mut artifact = None;
+    let mut repo = None;
+    let mut repo_id = None;
+    let mut workflow = None;
+    let mut source_ref = None;
+    let mut commit = None;
+    let mut bundle = None;
+    let mut root = None;
+    let mut online = false;
+    let mut format = "json".to_owned();
+    let mut predicate = None;
+    let mut scanner = None;
+    let mut subject = None;
+    let mut policy_path = None;
+    let mut format_seen = false;
+    while let Some(key) = args.next() {
+        if ["--help", "-h"].contains(&key.as_str()) {
+            print!("{}", usage());
+            return Ok(0);
+        }
+        if key == "--online" {
+            if online {
+                return Err("DUPLICATE_ATTESTATION_ONLINE".into());
+            }
+            online = true;
+            continue;
+        }
+        let value = args.next().ok_or("MISSING_ATTESTATION_OPTION_VALUE")?;
+        let place = match key.as_str() {
+            "--artifact" => &mut artifact,
+            "--policy" => &mut policy_path,
+            "--repo" => &mut repo,
+            "--repo-id" => &mut repo_id,
+            "--signer-workflow" => &mut workflow,
+            "--source-ref" => &mut source_ref,
+            "--source-commit" => &mut commit,
+            "--bundle" => &mut bundle,
+            "--trusted-root" => &mut root,
+            "--predicate-type" => &mut predicate,
+            "--scanner" if scan_mode => &mut scanner,
+            "--subject" if scan_mode => &mut subject,
+            "--format" => {
+                if format_seen {
+                    return Err("DUPLICATE_ATTESTATION_FORMAT".into());
+                }
+                format_seen = true;
+                format = value;
+                continue;
+            }
+            _ => return Err("UNKNOWN_ATTESTATION_OPTION".into()),
+        };
+        if place.replace(value).is_some() {
+            return Err("DUPLICATE_ATTESTATION_OPTION".into());
+        }
+    }
+    if !["json", "markdown"].contains(&format.as_str()) {
+        return Err("UNSUPPORTED_FORMAT".into());
+    }
+    let artifact = artifact.ok_or("MISSING_ATTESTATION_ARTIFACT")?;
+    let p = if let Some(policy_path) = policy_path {
+        if repo.is_some()
+            || repo_id.is_some()
+            || workflow.is_some()
+            || source_ref.is_some()
+            || commit.is_some()
+            || bundle.is_some()
+            || root.is_some()
+            || predicate.is_some()
+            || online
+        {
+            return Err("ATTESTATION_POLICY_SOURCE_CONFLICT".into());
+        }
+        let path = Path::new(&policy_path);
+        let meta = fs::symlink_metadata(path).map_err(|_| "ATTESTATION_POLICY_FILE_UNAVAILABLE")?;
+        if !meta.file_type().is_file() || meta.len() == 0 || meta.len() > 64 * 1024 {
+            return Err("ATTESTATION_POLICY_NOT_BOUNDED_REGULAR_FILE".into());
+        }
+        let raw = fs::read(path).map_err(|_| "ATTESTATION_POLICY_READ_FAILED")?;
+        if raw.len() > 64 * 1024 {
+            return Err("ATTESTATION_POLICY_TOO_LARGE".into());
+        }
+        let mut p: Policy =
+            serde_json::from_slice(&raw).map_err(|_| "ATTESTATION_POLICY_INVALID_JSON")?;
+        let base = path.parent().unwrap_or(Path::new("."));
+        if let Some(b) = p.bundle.as_mut() {
+            if b.is_relative() {
+                *b = base.join(&b);
+            }
+        }
+        if let Some(root) = p.trusted_root.as_mut() {
+            if root.is_relative() {
+                *root = base.join(&root);
+            }
+        }
+        p
+    } else {
+        Policy {
+            repo: repo.ok_or("MISSING_ATTESTATION_REPO")?,
+            repository_id: repo_id.ok_or("MISSING_ATTESTATION_REPO_ID")?,
+            signer_workflow: workflow.ok_or("MISSING_ATTESTATION_SIGNER_WORKFLOW")?,
+            source_ref: source_ref.ok_or("MISSING_ATTESTATION_SOURCE_REF")?,
+            source_commit: commit.ok_or("MISSING_ATTESTATION_SOURCE_COMMIT")?,
+            predicate_type: predicate.unwrap_or_else(|| "https://slsa.dev/provenance/v1".into()),
+            bundle: bundle.map(std::path::PathBuf::from),
+            trusted_root: root.map(std::path::PathBuf::from),
+            online,
+        }
+    };
+    let result = verify_artifact(Path::new(&artifact), &p);
+    if scan_mode {
+        use serde::Serialize;
+        use sha2::Digest;
+        use tredven_upstream::scanner::{
+            ScanDecision, ScanSummary, ScannerFormat, inspect_scanner, valid_subject,
+        };
+        #[derive(Serialize)]
+        struct AttestedScan {
+            schema: &'static str,
+            attestation: tredven_upstream::attestation::Report,
+            scanner_summary: Option<ScanSummary>,
+            decision: &'static str,
+            reason: &'static str,
+            scanner_execution_verified: bool,
+            production_ready: bool,
+            release_authorized: bool,
+            action_authorized: bool,
+        }
+        let subject = subject.ok_or("MISSING_ATTESTED_SCAN_SUBJECT")?;
+        if !valid_subject(&subject) {
+            return Err("INVALID_ATTESTED_SCAN_SUBJECT".into());
+        }
+        let scanner = match scanner.ok_or("MISSING_ATTESTED_SCAN_FORMAT")?.as_str() {
+            "trivy-json-v2" => ScannerFormat::TrivyJsonV2,
+            "osv-scanner-json-v2" => ScannerFormat::OsvScannerJsonV2,
+            _ => return Err("UNSUPPORTED_ATTESTED_SCAN_FORMAT".into()),
+        };
+        let (scan_result, decision, reason) = if result.verdict != Verdict::Verified {
+            (
+                None,
+                "BLOCKED",
+                "ARTIFACT_CRYPTOGRAPHIC_PROVENANCE_NOT_VERIFIED",
+            )
+        } else {
+            // Analyze only file bytes that match the cryptographically
+            // verified digest. A changed input must not gain review status.
+            let bytes = bounded_scan_file(&artifact)?;
+            let digest = format!("{:x}", sha2::Sha256::digest(&bytes));
+            if result.artifact_sha256.as_deref() != Some(digest.as_str()) {
+                (
+                    None,
+                    "BLOCKED",
+                    "VERIFIED_ARTIFACT_CHANGED_BEFORE_SCANNER_PARSE",
+                )
+            } else {
+                let parsed = inspect_scanner(&bytes, scanner, &subject);
+                let verdict = match parsed.decision {
+                    ScanDecision::Blocked => "BLOCKED",
+                    ScanDecision::Unknown => "UNKNOWN",
+                    ScanDecision::Review => "REVIEW",
+                };
+                (
+                    Some(parsed),
+                    verdict,
+                    "VERIFIED_FILE_ORIGIN_SCAN_CONTENT_REVIEW_ONLY",
+                )
+            }
+        };
+        let envelope = AttestedScan {
+            schema: "tredven.upstream.attested-scan-review.v1",
+            attestation: result,
+            scanner_summary: scan_result,
+            decision,
+            reason,
+            scanner_execution_verified: false,
+            production_ready: false,
+            release_authorized: false,
+            action_authorized: false,
+        };
+        let mut out = io::stdout().lock();
+        if format == "json" {
+            serde_json::to_writer_pretty(&mut out, &envelope)
+                .map_err(|_| "ATTESTED_SCAN_JSON_FAILED")?;
+            writeln!(&mut out).map_err(|_| "ATTESTED_SCAN_WRITE_FAILED")?;
+        } else {
+            writeln!(&mut out,"# Signed-file scanner review (not an upgrade approval)\n\nArtifact provenance: {:?}\nScanner decision: {}\nReason: {}\nScanner execution itself NOT VERIFIED. No deployment authority.\n",
+                envelope.attestation.verdict,envelope.decision,envelope.reason)
+                .map_err(|_|"ATTESTED_SCAN_MARKDOWN_FAILED")?;
+        }
+        return Ok(match decision {
+            "BLOCKED" => 2,
+            "UNKNOWN" => 3,
+            _ => 0,
+        });
+    }
+    let mut out = io::stdout().lock();
+    if format == "json" {
+        serde_json::to_writer_pretty(&mut out, &result).map_err(|_| "ATTESTATION_OUTPUT_FAILED")?;
+        writeln!(&mut out).map_err(|_| "ATTESTATION_WRITE_FAILED")?;
+    } else {
+        write!(&mut out, "{}", result.markdown()).map_err(|_| "ATTESTATION_WRITE_FAILED")?;
+    }
+    Ok(if result.verdict == Verdict::Verified {
+        0
+    } else {
+        2
+    })
+}
+
 fn run() -> Result<u8, String> {
     let mut args = env::args().skip(1);
     match args.next().as_deref() {
@@ -547,6 +761,8 @@ fn run() -> Result<u8, String> {
         Some("inspect-upgrade") => return run_upgrade(args),
         Some("inspect-delta") => return run_delta(args, false),
         Some("inspect-upgrade-delta") => return run_delta(args, true),
+        Some("verify-attestation") => return run_attestation(args, false),
+        Some("inspect-attested-scan") => return run_attestation(args, true),
         Some("inspect-contract") => return run_contract(args),
         _ => return Err(usage().trim_end().into()),
     };

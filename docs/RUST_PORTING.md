@@ -55,3 +55,7 @@ The Rust core now recognizes **Trivy JSON v2** and **OSV-Scanner v2 JSON** as lo
 ## R7 source-aware scanner delta
 
 The independent Rust CLI now offers `inspect-delta` and `inspect-upgrade-delta`, comparing two Trivy/OSV-Scanner JSON artifacts while enforcing exact scan scope, stable finding identity, optional source-tag commit binding and a conservative *absolute candidate* verdict. It does not replace `osv-scanner-action` baseline reporting or scanner security databases. [Details, ROI counterfactual and test evidence](R7_SCANNER_UPGRADE_DELTA.md).
+
+## R9 delegated signed artifact provenance
+
+The Rust CLI now accepts a strict, reusable owner-maintained GitHub attestation identity policy and delegates *all* cryptographic verification to installed official `gh`. Signed provenance is checked offline with bundle/root by default, or using explicit online public read-only GitHub lookups. An independent **real signed release binary** was verified; no signed scanner JSON has yet been tested. See [R9 proof and trust limitations](R9_REAL_GITHUB_ATTESTATION.md).

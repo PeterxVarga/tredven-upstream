@@ -184,6 +184,31 @@ python3 -I -B scripts/release_candidate.py verify --dir output/r8-local-candidat
 
 Requires an **already clean Git commit**, uses Cargo `--offline --locked`, runs fmt/Clippy/all-target tests, builds the optimized Linux binary, and verifies the Cargo source package before packaging. Creates four ignored local files: binary+license+README `.tar.gz`, `.crate` source archive, checksums and a machine-readable source/build manifest. The verifier checks the **exact files, hashes and bounded archive member metadata**, not signature authenticity, GitHub publisher identity or scanner provenance. It will not overwrite an existing candidate. No GitHub Actions workflows, tags or releases are created. The binary is tested only on the machine used to build it. See [R8 exact limitations and acceptance](docs/R8_OFFLINE_RELEASE_CANDIDATE.md).
 
+## R9 — Verify real signed GitHub artifacts (offline by default)
+
+A new **verify-attestation** command delegates cryptographic certificate and SLSA provenance verification to the **official GitHub CLI**, then enforces the exact repository ID, signer workflow, source commit/tag and signed filename/digest. No cryptographic implementation was added to Rust. This is an **artifact provenance check**, not approval to install, run or deploy software.
+
+A real, signed public release from [attested-delivery/rust-template](https://github.com/attested-delivery/rust-template/releases/tag/v0.1.0) was successfully verified both with public online GitHub lookups and with previously downloaded offline bundle/trusted roots. The same signed sample was rejected when its bytes, repository ID, source tag/commit, signing workflow, artifact name, bundle or root differed. The third-party executable was **never executed**.
+
+```bash
+# Once the sample artifact, GitHub bundle and trusted root have been
+# downloaded into output/r9-public-signed-fixture (see R9 documentation):
+cargo run --locked -- verify-attestation \
+  --artifact output/r9-public-signed-fixture/rust_template-0.1.0-linux-amd64 \
+  --policy examples/r9-public-attestation-policy.example.json
+
+# For a real, independently signed Trivy JSON file, use the SAME policy gate:
+cargo run --locked -- inspect-attested-scan \
+  --artifact /ABS/PATH/TO/SIGNED/TRIVY.json \
+  --policy /ABS/PATH/TO/OWNER-MAINTAINED-POLICY.json \
+  --scanner trivy-json-v2 \
+  --subject 'EXACT_TRIVY_ArtifactName'
+```
+
+**Important:** the included public signed sample is a release **binary**, not a scanner report. `inspect-attested-scan` will return UNKNOWN for that real signed binary because its content is not Trivy/OSV JSON. **An authenticated scanner file is not proof that a scanner executed**, covered the right source or used a fresh vulnerability database. Our previous local R8 Rust candidate also remains unsigned.
+
+Offline mode requires an existing local attestation **bundle** and trusted root from a separately authenticated source, and never silently falls back to online. `--online` explicitly permits read-only GitHub API lookups. An offline custom root is caller-supplied; its matching hash alone does not establish trust. All output retains `production_ready: false`, `release_authorized: false` and `scanner_execution_verified: false`. See [R9 real signed verification, reproducible fixture, security policy and falsification](docs/R9_REAL_GITHUB_ATTESTATION.md).
+
 ## How the prototype decides
 
 | Input evidence | Decision | What it means |
