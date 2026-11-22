@@ -1,0 +1,27 @@
+{
+  "schema": "tredven.upstream.upgrade-review.v1",
+  "project": "public-rust-template",
+  "repo": "/ABS/PATH/TO/LOCAL/PUBLIC/rust-template",
+  "baseline_tag": "v0.1.0",
+  "candidate_tag": "r11-local-main-snapshot",
+  "scan": {
+    "mode": "signed-ci-receipt",
+    "receipt": "/ABS/PATH/TO/ci-run.receipt.json",
+    "baseline": "/ABS/PATH/TO/baseline.scanner.json",
+    "candidate": "/ABS/PATH/TO/candidate.scanner.json",
+    "scanned_repo": "attested-delivery/rust-template",
+    "scanner_version": "2.7.1",
+    "scanner_binary_sha256": "fb7dab19a8bd9bbe5c3189f09d4b7ee1820c9553a23bac202648a56efd2f6ee8",
+    "attestation": {
+      "repo": "PeterxVarga/tredven-upstream",
+      "repository_id": "1467524521",
+      "signer_workflow": "PeterxVarga/tredven-upstream/.github/workflows/r11-manual-public-osv-attest.yml",
+      "source_ref": "refs/heads/main",
+      "source_commit": "0000000000000000000000000000000000000000",
+      "predicate_type": "https://slsa.dev/provenance/v1",
+      "bundle": "/ABS/PATH/TO/official-GitHub-attestation-bundle.jsonl",
+      "trusted_root": "/ABS/PATH/TO/independently-trusted-root.jsonl",
+      "online": false
+    }
+  }
+}

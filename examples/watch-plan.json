@@ -1,0 +1,44 @@
+{
+  "schema": "tredven.upstream.watch-plan.v1",
+  "targets": [
+    {
+      "id": "sample-upstream",
+      "group": "core",
+      "enabled": false,
+      "repo": "./path/to/local-clone",
+      "from_tag": "v1.0.0",
+      "to_tag": "v1.1.0",
+      "required_evidence": [
+        {
+          "id": "ci-regression",
+          "source_tool": "ci",
+          "status": "not_run"
+        },
+        {
+          "id": "security-audit",
+          "source_tool": "osv-scanner",
+          "status": "not_run"
+        },
+        {
+          "id": "backup-proof",
+          "source_tool": "operator",
+          "status": "not_run"
+        },
+        {
+          "id": "rollback-proof",
+          "source_tool": "operator",
+          "status": "not_run"
+        }
+      ]
+    },
+    {
+      "id": "sample-later",
+      "group": "optional",
+      "enabled": false,
+      "repo": "./path/to/another-clone",
+      "from_tag": "v2.0.0",
+      "to_tag": "v2.1.0",
+      "required_evidence": []
+    }
+  ]
+}

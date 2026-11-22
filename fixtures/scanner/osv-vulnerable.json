@@ -1,0 +1,24 @@
+{
+  "results": [
+    {
+      "source": {
+        "path": "Cargo.lock",
+        "type": "lockfile"
+      },
+      "packages": [
+        {
+          "package": {
+            "name": "example",
+            "version": "0.0.0",
+            "ecosystem": "crates.io"
+          },
+          "vulnerabilities": [
+            {
+              "id": "SYNTHETIC-OSV-0001"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

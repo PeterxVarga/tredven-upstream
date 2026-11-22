@@ -1,0 +1,11 @@
+{
+  "repo": "attested-delivery/rust-template",
+  "repository_id": "1273337322",
+  "signer_workflow": "attested-delivery/rust-template/.github/workflows/release.yml",
+  "source_ref": "refs/tags/v0.1.0",
+  "source_commit": "2b97f20f71e2b6d9c3f23ea7e968b7dd26d97e6a",
+  "predicate_type": "https://slsa.dev/provenance/v1",
+  "bundle": "../output/r9-public-signed-fixture/sha256:e5bb76a3dcfb7faba7306c623326b8e590f023a41649e974935c41bf097475ea.jsonl",
+  "trusted_root": "../output/r9-public-signed-fixture/trusted_root.jsonl",
+  "online": false
+}

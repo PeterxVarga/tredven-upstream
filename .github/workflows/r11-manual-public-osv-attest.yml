@@ -1,0 +1,124 @@
+# R11 OWNER-GATED. Manual-only. Does not run on push or PR.
+# Running later uploads PUBLIC reports and a signed attestation.
+name: "R11 Manual Signed Public OSV Reference"
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+concurrency:
+  group: r11-manual-public-reference
+  cancel-in-progress: false
+jobs:
+  public-scanner-proof:
+    # Permit only a manually dispatched, owner-reviewed default-branch workflow.
+    # GitHub otherwise allows choosing an unreviewed ref at dispatch time.
+    if: github.repository == 'PeterxVarga/tredven-upstream' && github.repository_id == 1467524521 && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Check out workflow source, without persisted credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # pinned v4
+        with:
+          persist-credentials: false
+          submodules: false
+      - name: Install pinned Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.100.0 --profile minimal --component rustfmt --component clippy
+          rustc +1.100.0 --version
+      - name: Fetch public source and SHA-pinned OSV-Scanner
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/r11"
+          mkdir -p "$root/bin"
+          git -c protocol.file.allow=never clone --quiet --no-checkout https://github.com/attested-delivery/rust-template.git "$root/source"
+          git -C "$root/source" fetch --quiet --tags origin
+          git -C "$root/source" cat-file -e '44d052afce639390846b9369be3d4ea684f4e7c4^{commit}'
+          test "$(git -C "$root/source" rev-parse 'refs/tags/v0.1.0^{commit}')" = 2b97f20f71e2b6d9c3f23ea7e968b7dd26d97e6a
+          git -C "$root/source" tag r11-local-main-snapshot 44d052afce639390846b9369be3d4ea684f4e7c4
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            https://github.com/google/osv-scanner/releases/download/v2.7.1/osv-scanner_linux_amd64 \
+            --output "$root/bin/osv-scanner"
+          echo "fb7dab19a8bd9bbe5c3189f09d4b7ee1820c9553a23bac202648a56efd2f6ee8  $root/bin/osv-scanner" | sha256sum --check
+          chmod 700 "$root/bin/osv-scanner"
+          "$root/bin/osv-scanner" --version | grep -F '2.7.1'
+      - name: Two source-bound public scans via Rust CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/r11"
+          python3 - <<'PY'
+          import json,os,pathlib
+          root=pathlib.Path(os.environ["RUNNER_TEMP"])/"r11"
+          config={"schema":"tredven.upstream.upgrade-review.v1","project":"public-rust-template",
+          "repo":str(root/"source"),"baseline_tag":"v0.1.0","candidate_tag":"r11-local-main-snapshot",
+          "scan":{"mode":"local-osv-lockfile","lockfile":"Cargo.lock",
+          "binary":str(root/"bin/osv-scanner"),
+          "binary_sha256":"fb7dab19a8bd9bbe5c3189f09d4b7ee1820c9553a23bac202648a56efd2f6ee8",
+          "allow_public_osv_network":True}}
+          (root/"config.json").write_text(json.dumps(config,sort_keys=True,indent=2)+"\n")
+          PY
+          set +e
+          cargo run --locked --release -- review-upgrade --config "$root/config.json" \
+            --evidence-dir "$root/evidence" > "$root/stdout-review.json"
+          result=$?
+          set -e
+          # Both non-blocking REVIEW and expected BLOCKED are valid recorded
+          # outcomes; scanner/API drift must not manufacture false evidence.
+          test "$result" -eq 0 -o "$result" -eq 2
+          (cd "$root/evidence" && sha256sum --check SHA256SUMS)
+          python3 - <<'PY'
+          import json,os,pathlib
+          r=json.loads((pathlib.Path(os.environ["RUNNER_TEMP"])/"r11/evidence/review.json").read_text())
+          assert r["decision"] in ("BLOCKED","REVIEW")
+          assert r["delta"]["comparable_scan_scope"] is True
+          assert r["baseline"]["local_scanner_process_exit"] in (0,1)
+          assert r["candidate"]["local_scanner_process_exit"] in (0,1)
+          assert r["production_ready"] is False
+          PY
+      - name: Create unsigned exact run receipt
+        shell: bash
+        env:
+          GITHUB_REPOSITORY_ID: ${{ github.repository_id }}
+        run: |
+          set -euo pipefail
+          python3 -I -B scripts/ci_scan_receipt.py \
+            --evidence-dir "$RUNNER_TEMP/r11/evidence" \
+            --out "$RUNNER_TEMP/r11/ci-run.receipt.json"
+      - name: Sign receipt with official GitHub/Sigstore attestation
+        id: receipt_attestation
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2 pinned
+        with:
+          subject-path: ${{ runner.temp }}/r11/ci-run.receipt.json
+      - name: Preserve attestation bundle for independent offline verification
+        shell: bash
+        env:
+          ATTESTATION_BUNDLE: ${{ steps.receipt_attestation.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          # The verifier must independently trust the Sigstore root and signer policy.
+          test -n "$ATTESTATION_BUNDLE"
+          test -f "$ATTESTATION_BUNDLE"
+          test ! -L "$ATTESTATION_BUNDLE"
+          size=$(wc -c < "$ATTESTATION_BUNDLE")
+          test "$size" -ge 1000 && test "$size" -le 1048576
+          install -m 0600 "$ATTESTATION_BUNDLE" "$RUNNER_TEMP/r11/ci-run.receipt.attestation.bundle.jsonl"
+      - name: Upload only public scanner evidence for independent review
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # pinned v4
+        with:
+          name: r11-public-osv-evidence
+          path: |
+            ${{ runner.temp }}/r11/ci-run.receipt.attestation.bundle.jsonl
+            ${{ runner.temp }}/r11/ci-run.receipt.json
+            ${{ runner.temp }}/r11/evidence/baseline.Cargo.lock
+            ${{ runner.temp }}/r11/evidence/candidate.Cargo.lock
+            ${{ runner.temp }}/r11/evidence/baseline.scanner.json
+            ${{ runner.temp }}/r11/evidence/candidate.scanner.json
+            ${{ runner.temp }}/r11/evidence/review.json
+            ${{ runner.temp }}/r11/evidence/SHA256SUMS
+          retention-days: 7
+          if-no-files-found: error
