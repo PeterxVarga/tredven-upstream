@@ -248,5 +248,65 @@ class LicenseAnnexTests(unittest.TestCase):
             self._build([forged])
 
 
+class PortableMuslNoticeTests(unittest.TestCase):
+    """R19 musl archiving stays opt-in, bounded and license-notice complete."""
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory(prefix="r19-portable-musl-")
+        self.addCleanup(self.temp.cleanup)
+        self.root=Path(self.temp.name)
+        self.dest=self.root/"musl-candidate"
+        self.runtime_notices=b"<html><body>Rust std and musl libc license notices</body></html>"
+        self.kw=dict(binary=b"synthetic-static-pie-not-executable",
+                     crate=b"synthetic-crate",license_bytes=b"synthetic MIT",
+                     readme=b"synthetic README",notices=b"synthetic crates notices",
+                     source_commit="a"*40, version="0.1.0",
+                     target="x86_64-unknown-linux-musl",
+                     rustc="rustc 1.100.0 (fixture)",cargo="cargo 1.100.0 (fixture)",
+                     runtime_notices=self.runtime_notices)
+
+    def test_musl_build_archive_contains_pinned_rust_standard_library_notices(self):
+        m.write_candidate(self.dest,**self.kw)
+        receipt=m.verify_candidate(self.dest)
+        self.assertEqual(receipt["target"],"x86_64-unknown-linux-musl")
+        self.assertFalse(receipt["publication_authorized"])
+        self.assertEqual(receipt["artifacts"]["rust_runtime_notices_in_archive_sha256"],
+                         m.sha(self.runtime_notices))
+        import tarfile
+        with tarfile.open(next(self.dest.glob("*.tar.gz")),"r:gz") as tar:
+            names=set(tar.getnames())
+            self.assertEqual(names,{"bin/tredven-upstream","LICENSE","README.md",
+                                    "THIRD_PARTY_NOTICES.txt","RUST_RUNTIME_NOTICES.html"})
+            self.assertEqual(tar.extractfile("RUST_RUNTIME_NOTICES.html").read(),
+                             self.runtime_notices)
+
+    def test_musl_candidate_without_runtime_notices_fails_before_creation(self):
+        args={**self.kw,"runtime_notices":None}
+        with self.assertRaisesRegex(m.InvalidCandidate,"MUSL_RUST_RUNTIME_LICENSE_NOTICES_REQUIRED"):
+            m.write_candidate(self.dest,**args)
+        self.assertFalse(self.dest.exists())
+
+    def test_gnu_candidate_must_not_silently_claim_musl_notice_coverage(self):
+        args={**self.kw,"target":"x86_64-unknown-linux-gnu"}
+        with self.assertRaisesRegex(m.InvalidCandidate,"RUST_RUNTIME_NOTICES_ONLY_QUALIFIED_FOR_MUSL"):
+            m.write_candidate(self.dest,**args)
+
+    def test_tampered_notices_fail_even_when_archive_and_checksums_rehashed(self):
+        m.write_candidate(self.dest,**self.kw)
+        archive=next(self.dest.glob("*.tar.gz"))
+        archive.write_bytes(m.archive_bytes(self.kw["binary"],self.kw["license_bytes"],
+                                           self.kw["readme"],self.kw["notices"],
+                                           b"<html>musl libc MODIFIED</html>"))
+        manifest=self.dest/"manifest.json"
+        data=json.loads(manifest.read_text())
+        data["artifacts"]["archive"]["sha256"]=m.sha(archive.read_bytes())
+        manifest.write_bytes(m.json_bytes(data))
+        files=[f for f in self.dest.iterdir() if f.name!="SHA256SUMS"]
+        (self.dest/"SHA256SUMS").write_text(
+            "".join(f"{m.sha(f.read_bytes())}  {f.name}\n" for f in sorted(files)))
+        with self.assertRaisesRegex(m.InvalidCandidate,
+                                    "CANDIDATE_RUST_RUNTIME_NOTICES_DIGEST_MISMATCH"):
+            m.verify_candidate(self.dest)
+
+
 if __name__=="__main__":
     unittest.main(verbosity=2)

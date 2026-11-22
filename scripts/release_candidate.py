@@ -46,17 +46,21 @@ def json_bytes(obj: dict) -> bytes:
     return (json.dumps(obj, sort_keys=True, ensure_ascii=True, indent=2) + "\n").encode()
 
 
-def archive_bytes(binary: bytes, license_bytes: bytes, readme: bytes, notices: bytes) -> bytes:
+def archive_bytes(binary: bytes, license_bytes: bytes, readme: bytes, notices: bytes,
+                  runtime_notices: bytes | None = None) -> bytes:
     """Tar/gzip metadata are fixed so unchanged bytes get the same archive SHA."""
     stream = io.BytesIO()
     with gzip.GzipFile(filename="", mode="wb", fileobj=stream, mtime=0, compresslevel=9) as gz:
         with tarfile.open(fileobj=gz, mode="w|", format=tarfile.GNU_FORMAT) as tf:
-            for name, raw, mode in [
+            members = [
                 ("bin/tredven-upstream", binary, 0o755),
                 ("LICENSE", license_bytes, 0o644),
                 ("README.md", readme, 0o644),
                 ("THIRD_PARTY_NOTICES.txt", notices, 0o644),
-            ]:
+            ]
+            if runtime_notices is not None:
+                members.append(("RUST_RUNTIME_NOTICES.html", runtime_notices, 0o644))
+            for name, raw, mode in members:
                 member = tarfile.TarInfo(name)
                 member.size = len(raw)
                 member.mode = mode
@@ -68,7 +72,8 @@ def archive_bytes(binary: bytes, license_bytes: bytes, readme: bytes, notices: b
 
 def write_candidate(dest: Path, *, binary: bytes, crate: bytes,
                     license_bytes: bytes, readme: bytes, notices: bytes, source_commit: str,
-                    version: str, target: str, rustc: str, cargo: str) -> dict:
+                    version: str, target: str, rustc: str, cargo: str,
+                    runtime_notices: bytes | None = None) -> dict:
     if dest.exists() or dest.is_symlink():
         raise InvalidCandidate("OUTPUT_EXISTS_NO_OVERWRITE")
     if not GIT_SHA.fullmatch(source_commit) or not re.fullmatch(r"[0-9A-Za-z._+-]{1,48}", version):
@@ -78,16 +83,25 @@ def write_candidate(dest: Path, *, binary: bytes, crate: bytes,
     if (len(binary) > MAX_BYTES or len(crate) > MAX_BYTES or
         not binary or not crate or not notices or len(notices) > MAX_BYTES):
         raise InvalidCandidate("SOURCE_OR_BINARY_OUT_OF_BOUNDS")
+    is_musl = target == "x86_64-unknown-linux-musl"
+    if is_musl:
+        if (not runtime_notices or len(runtime_notices) > MAX_BYTES
+            or b"musl libc" not in runtime_notices):
+            raise InvalidCandidate("MUSL_RUST_RUNTIME_LICENSE_NOTICES_REQUIRED")
+    elif runtime_notices is not None:
+        raise InvalidCandidate("RUST_RUNTIME_NOTICES_ONLY_QUALIFIED_FOR_MUSL")
     dest.mkdir(mode=0o700, parents=False, exist_ok=False)
     archive_name = f"{NAME}-v{version}-{target}.tar.gz"
     crate_name = f"{NAME}-{version}.crate"
-    archive = archive_bytes(binary, license_bytes, readme, notices)
+    archive = archive_bytes(binary, license_bytes, readme, notices, runtime_notices)
     artifact_info = {
         "archive": {"filename": archive_name, "sha256": sha(archive)},
         "crate": {"filename": crate_name, "sha256": sha(crate)},
         "binary_in_archive_sha256": sha(binary),
         "third_party_notices_in_archive_sha256": sha(notices),
     }
+    if runtime_notices is not None:
+        artifact_info["rust_runtime_notices_in_archive_sha256"] = sha(runtime_notices)
     manifest = {
         "schema": SCHEMA,
         "name": NAME,
@@ -150,9 +164,14 @@ def verify_candidate(dest: Path) -> dict:
         raise InvalidCandidate("RELEASE_TARGET_INVALID")
     expected_archive = f"{NAME}-v{m['version']}-{m['target']}.tar.gz"
     expected_crate = f"{NAME}-{m['version']}.crate"
-    if m["artifacts"].get("archive",{}).get("filename") != expected_archive or \
-       m["artifacts"].get("crate",{}).get("filename") != expected_crate or \
-       set(m["artifacts"]) != {"archive","crate","binary_in_archive_sha256","third_party_notices_in_archive_sha256"}:
+    portable = m["target"] == "x86_64-unknown-linux-musl"
+    artifact_fields = {"archive","crate","binary_in_archive_sha256",
+                       "third_party_notices_in_archive_sha256"}
+    if portable:
+        artifact_fields.add("rust_runtime_notices_in_archive_sha256")
+    if (m["artifacts"].get("archive",{}).get("filename") != expected_archive or
+        m["artifacts"].get("crate",{}).get("filename") != expected_crate or
+        set(m["artifacts"]) != artifact_fields):
         raise InvalidCandidate("RELEASE_ARTIFACT_IDENTITY_INVALID")
     files = {expected_archive,expected_crate,"SHA256SUMS","manifest.json"}
     if {p.name for p in dest.iterdir()} != files:
@@ -179,13 +198,19 @@ def verify_candidate(dest: Path) -> dict:
     notices_sha=m["artifacts"]["third_party_notices_in_archive_sha256"]
     if not isinstance(notices_sha,str) or not HEX_SHA.fullmatch(notices_sha):
         raise InvalidCandidate("INVALID_LICENSE_NOTICES_DIGEST")
+    runtime_notices_sha = m["artifacts"].get("rust_runtime_notices_in_archive_sha256")
+    if portable and (not isinstance(runtime_notices_sha, str) or
+                     not HEX_SHA.fullmatch(runtime_notices_sha)):
+        raise InvalidCandidate("INVALID_RUST_RUNTIME_NOTICES_DIGEST")
     # Streaming archive parsing: check each member before decompression.
     # Never build a full untrusted member list from a tiny gzip bomb.
     seen=set()
     with tarfile.open(fileobj=io.BytesIO(raw[expected_archive]),mode="r|gz") as tar:
         expected={"bin/tredven-upstream","LICENSE","README.md","THIRD_PARTY_NOTICES.txt"}
+        if portable:
+            expected.add("RUST_RUNTIME_NOTICES.html")
         for item in tar:
-            if item.name not in expected or item.name in seen or len(seen)>=4:
+            if item.name not in expected or item.name in seen or len(seen)>=len(expected):
                 raise InvalidCandidate("UNEXPECTED_ARCHIVE_FILE_SCOPE")
             if (not item.isfile() or item.size<=0 or item.size>MAX_BYTES
                 or item.mtime!=0 or item.uid!=0 or item.gid!=0 or item.name.startswith("/")):
@@ -200,6 +225,8 @@ def verify_candidate(dest: Path) -> dict:
                 raise InvalidCandidate("CANDIDATE_BINARY_DIGEST_MISMATCH")
             if item.name=="THIRD_PARTY_NOTICES.txt" and sha(contents)!=notices_sha:
                 raise InvalidCandidate("CANDIDATE_LICENSE_NOTICES_DIGEST_MISMATCH")
+            if item.name=="RUST_RUNTIME_NOTICES.html" and sha(contents)!=runtime_notices_sha:
+                raise InvalidCandidate("CANDIDATE_RUST_RUNTIME_NOTICES_DIGEST_MISMATCH")
             seen.add(item.name)
         if seen!=expected:
             raise InvalidCandidate("UNEXPECTED_ARCHIVE_FILE_SCOPE")
@@ -299,7 +326,7 @@ def build_third_party_notices(repo: Path, env: dict) -> bytes:
     return data
 
 
-def local_build(out_arg: str) -> dict:
+def local_build(out_arg: str, portable_musl: bool = False) -> dict:
     repo = Path(__file__).resolve().parent.parent
     output_root=repo/"output"
     if output_root.is_symlink():
@@ -332,16 +359,46 @@ def local_build(out_arg: str) -> dict:
         run_cmd(["rustc","-vV"],repo,env).splitlines() if line.startswith("host:")),None)
     if target is None or not re.fullmatch(r"[a-z0-9_-]{4,80}",target) or "linux" not in target:
         raise InvalidCandidate("LINUX_HOST_TARGET_NOT_QUALIFIED")
+    host_target = target
+    runtime_notices = None
+    if portable_musl:
+        if host_target != "x86_64-unknown-linux-gnu":
+            raise InvalidCandidate("PORTABLE_MUSL_REQUIRES_QUALIFIED_X86_64_GNU_HOST")
+        target = "x86_64-unknown-linux-musl"
+        sysroot = Path(run_cmd(["rustc","--print","sysroot"],repo,env).strip())
+        # Use the exact pinned compiler toolchain's own linker and target std.
+        # Neither an arbitrary PATH linker nor an inherited RUSTFLAGS may
+        # silently alter this local, unsigned candidate.
+        lld = sysroot/"lib"/"rustlib"/host_target/"bin"/"rust-lld"
+        target_std = sysroot/"lib"/"rustlib"/target/"lib"
+        if not lld.is_file() or not target_std.is_dir():
+            raise InvalidCandidate("PINNED_MUSL_TARGET_OR_RUST_LLD_NOT_INSTALLED")
+        runtime_notices = regular_file(
+            sysroot/"share"/"doc"/"rust"/"COPYRIGHT-library.html")
+        if b"musl libc" not in runtime_notices:
+            raise InvalidCandidate("MUSL_LICENSE_TEXT_NOT_IN_PINNED_RUST_STD_NOTICES")
+        env["CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER"] = str(lld)
     version=tomllib.loads((repo/"Cargo.toml").read_text())["package"]["version"]
     notices=build_third_party_notices(repo,env)
     run_cmd(["cargo","fmt","--check"],repo,env)
     run_cmd(["cargo","clippy","--offline","--locked","--all-targets","--","-D","warnings"],repo,env)
     run_cmd(["cargo","test","--offline","--locked","--all-targets"],repo,env)
-    run_cmd(["cargo","build","--offline","--locked","--release"],repo,env)
+    build_args = ["cargo","build","--offline","--locked","--release"]
+    if portable_musl:
+        build_args.extend(["--target",target])
+    run_cmd(build_args,repo,env)
     run_cmd(["cargo","package","--offline","--locked"],repo,env)
     target_root=Path(env.get("CARGO_TARGET_DIR",str(repo/"target")))
     if not target_root.is_absolute(): target_root=repo/target_root
-    binary=regular_file(target_root/"release"/NAME)
+    binary_path = target_root/target/"release"/NAME if portable_musl else target_root/"release"/NAME
+    binary=regular_file(binary_path)
+    if portable_musl:
+        # The different GLIBC baseline cannot be the 'portable' artifact.
+        # Prove the target actually produced a static, no-interpreter ELF.
+        headers = run_cmd(["readelf","-l",str(binary_path)],repo,env)
+        libraries = run_cmd(["readelf","-d",str(binary_path)],repo,env)
+        if "INTERP" in headers or "(NEEDED)" in libraries:
+            raise InvalidCandidate("PORTABLE_BINARY_MUST_BE_STATIC_NO_DYNAMIC_LIBS")
     crate=regular_file(target_root/"package"/f"{NAME}-{version}.crate")
     license_bytes=regular_file(repo/"LICENSE")
     readme=regular_file(repo/"README.md")
@@ -351,7 +408,8 @@ def local_build(out_arg: str) -> dict:
     try:
         m=write_candidate(temp_dir,binary=binary,crate=crate,
             license_bytes=license_bytes,readme=readme,notices=notices,source_commit=commit,
-            version=version,target=target,rustc=rustc,cargo=cargo)
+            version=version,target=target,rustc=rustc,cargo=cargo,
+            runtime_notices=runtime_notices)
         verified=verify_candidate(temp_dir)
         if verified!=m:raise InvalidCandidate("PRE_RELEASE_SELF_VERIFICATION_FAILED")
         temp_dir.rename(requested)
@@ -367,11 +425,14 @@ def main() -> int:
     sub=p.add_subparsers(dest="action",required=True)
     b=sub.add_parser("build",help="Offline local RC; never publish or sign")
     b.add_argument("--out",required=True)
+    b.add_argument("--portable-musl", action="store_true",
+                   help="Build a static x86_64 Linux musl archive with pinned Rust runtime notices")
     v=sub.add_parser("verify",help="Check RC bytes, not publisher trust")
     v.add_argument("--dir",required=True)
     args=p.parse_args()
     try:
-        receipt=local_build(args.out) if args.action=="build" else verify_candidate(Path(args.dir))
+        receipt=(local_build(args.out, args.portable_musl)
+                 if args.action=="build" else verify_candidate(Path(args.dir)))
         print(json.dumps({
             "schema":SCHEMA,"result":"LOCAL_RC_VERIFIED_UNATTESTED_NO_RELEASE",
             "source_commit":receipt["source_commit"],"version":receipt["version"],

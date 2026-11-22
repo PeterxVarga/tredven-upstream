@@ -87,6 +87,44 @@ See [the independent public fd benchmark](docs/R16_FIRST_REAL_VALUE_COMPETITIVE_
 [OSS/paid direction](docs/R17_OSS_PRODUCT_DIRECTION.md), and
 [pinned OSV cache test evidence](docs/R18_PINNED_OSV_FIRST_USE.md).
 
+
+## Linux archive portability and offline release candidates (R19)
+
+The default R12/R18 local release-candidate builder produces a
+`x86_64-unknown-linux-gnu` binary from the host's pinned Rust 1.100.0
+toolchain. On the Fedora build host it uses glibc symbol
+`GLIBC_2.39`: Debian 12 emitted a weak-symbol warning even though
+`--help` exited successfully. **Do not describe this build as
+universally compatible with every Linux distro.**
+
+For an optionally **statically linked** Linux x86-64 archive, the existing
+offline release-candidate builder can use Rust's official musl target.
+Install that toolchain component separately beforehand; the build itself
+does not download crates or OSV:
+
+```bash
+rustup +1.100.0 target add x86_64-unknown-linux-musl
+
+# Run from a clean committed checkout, with the pinned Rust 1.100.0 host.
+python3 -I -B scripts/release_candidate.py build \
+  --portable-musl --out "$PWD/output/portable-musl-local-rc"
+python3 -I -B scripts/release_candidate.py verify \
+  --dir "$PWD/output/portable-musl-local-rc"
+```
+
+This requires the pinned Rust-provided `rust-lld` linker and
+`readelf` to qualify **no ELF interpreter or dynamic dependencies**.
+The archive includes the normal 21-crate third-party license annex plus
+`RUST_RUNTIME_NOTICES.html` copied from the exact pinned toolchain's
+`COPYRIGHT-library.html` and checked by SHA-256 in the local
+manifest. The musl mode does **not** silently change the original GNU
+builder, and a missing runtime notice blocks it.
+
+**This is still an unsigned, unpublished local artifact.** Internal
+license/byte checks do not replace legal review or independent authenticity
+attestation. Windows/macOS and hosted release verification are not covered.
+See [R19 release qualification](docs/R19_OSS_ALPHA_RELEASE_QUALIFICATION.md).
+
 ## Run
 
 Requires a local Rust toolchain (1.100.0 pinned for contributors). The `inspect-git` command additionally requires an installed `git` executable and an existing local Git repository with named tags. Other toolchains may compile because the crate's minimum Rust version is 1.85.
