@@ -82,6 +82,10 @@ has **not been run or signed**, and a locally fabricated workflow envelope
 is correctly rejected. There is **no live one-click upgrade**.
 See [R29 scope, actual evidence and missing hosted proof](docs/R29_REAL_APP_AND_SIGNED_CI_PROVENANCE.md).
 
+### R38 — actual PR-to-signed-artifact/deployment evidence correlation (read-only)
+
+The [R38 original GitHub run, signed archive and deployment evidence audit](docs/R38_PR_BUILD_ARTIFACT_DEPLOYMENT_EVIDENCE.md) uses the existing pinned Rust/Sigstore verifier and GitHub API to check one real R30 PR against a real GitHub-hosted R20 signed archive. The artifact signature **VERIFIED**, but the PR and signed build have **different source commits**; GitHub shows no exact PR-bound successful check or deployment in this scoped query. `scripts/r38_pr_build_deployment_probe.py` produces an explicit `HOLD_PR_TO_SIGNED_BUILD_SOURCE_MISMATCH` rather than pretending this proves a deployed and owner-accepted upgrade. No workflow dispatch, merge or deployment is performed.
+
 ### R30 — GitHub Project Workspace (local first-use preview, Draft only)
 
 Tredven Upstream now has an **authenticated GitHub CLI-backed first-use flow**

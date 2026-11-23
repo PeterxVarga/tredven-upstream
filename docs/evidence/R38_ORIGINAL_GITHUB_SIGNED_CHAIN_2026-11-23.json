@@ -1,0 +1,65 @@
+{
+  "blockers": [
+    "PR_HEAD_AND_SIGNED_RUN_SOURCE_COMMIT_DIFFER",
+    "NO_EXACT_PR_BOUND_SUCCESSFUL_GITHUB_CHECK_FOR_SIGNED_RUN",
+    "DEPLOYED_ARTIFACT_DIGEST_NOT_VERIFIED",
+    "AUTHORIZED_DEPLOYMENT_ACCEPTANCE_NOT_VERIFIED"
+  ],
+  "commercial_winner": null,
+  "decision": "HOLD_PR_TO_SIGNED_BUILD_SOURCE_MISMATCH",
+  "deployment_digest_verified": false,
+  "mode": "PUBLIC_GITHUB_READONLY_EXISTING_RUST_SIGSTORE_VERIFIER",
+  "next_decisive_test": "Separately authorized PR-head-bound hosted CI with signed exact artifact, followed by read-only deployed digest and owner acceptance provenance; do not deploy or dispatch in this audit.",
+  "owner_acceptance_verified": false,
+  "performed_external_mutations": false,
+  "pr": {
+    "base_sha": "44d6eef16de40e33474e578c0ffcd7a2e1b4c698",
+    "draft": true,
+    "head_sha": "1c8a15ad84858bead99b88e655915975ceefb2e9",
+    "number": 10,
+    "url": "https://github.com/PeterxVarga/tredven-upstream/pull/10"
+  },
+  "production_ready": false,
+  "run": {
+    "attempt": 1,
+    "conclusion": "success",
+    "event": "workflow_dispatch",
+    "head_sha": "61d1a12d88e822fdfa6ba652115cbf06132614df",
+    "run_id": 45059405597,
+    "url": "https://github.com/PeterxVarga/tredven-upstream/actions/runs/45059405597",
+    "workflow": ".github/workflows/r20-manual-alpha-provenance.yml"
+  },
+  "safety": [
+    "NO_SEND",
+    "NO_PUSH_BY_PROBE",
+    "NO_MERGE",
+    "NO_DEPLOY",
+    "NO_WORKFLOW_DISPATCH",
+    "NO_CUSTOMER_DATA",
+    "NO_NEW_PROVIDER",
+    "NO_PAID_API"
+  ],
+  "schema": "tredven.upstream.r38.pr-run-artifact-deployment-chain.v1",
+  "signed_artifact": {
+    "cryptographic_provenance_verified_by_existing_rust": true,
+    "filename": "tredven-upstream-v0.1.0-x86_64-unknown-linux-musl.tar.gz",
+    "github_actions_storage_zip_metadata_available": true,
+    "sha256": "ce0524378e0aad328e04813a9003b2211b7c6d24ee7c3fcc87e7ac0e28264a66",
+    "storage_zip_digest_is_not_inner_tar_digest": true,
+    "verified_exact_source_run_uri": "https://github.com/PeterxVarga/tredven-upstream/actions/runs/45059405597/attempts/1"
+  },
+  "source_binding": {
+    "github_deployments_for_pr_head_reported": 0,
+    "github_deployments_list_complete": true,
+    "pr_check_runs_reported": 0,
+    "pr_has_matching_run_check": false,
+    "pr_head_equals_signed_run_source": false
+  },
+  "stages": {
+    "acceptance": "NO_CRYPTOGRAPHICALLY_TRUSTED_OWNER_ACCEPTANCE",
+    "artifact": "SIGNED_MAIN_RUN_ARTIFACT_VERIFIED_NOT_PR_SOURCE",
+    "build_ci": "SUCCESSFUL_MAIN_WORKFLOW_NOT_BOUND_TO_PR",
+    "deployment": "NO_MATCHING_GITHUB_DEPLOYMENT_EXTERNAL_UNKNOWN",
+    "pr_identity": "ORIGINAL_GITHUB_PR_CONFIRMED"
+  }
+}
