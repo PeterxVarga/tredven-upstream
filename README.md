@@ -432,6 +432,10 @@ We intend to replace the existing Python/Node compatibility-gate logic gradually
 
 An optional hosted product might eventually maintain verified compatibility-rule feeds and multi-instance monitoring. This repository will remain useful for free and without that service. **No paid product or verified external adoption is claimed.**
 
+### R39 — reviewed-main-only, owner-gated exact PR10 signed CI (prepared, NOT run)
+
+[**R39 owner-gated PR10 source-bound CI workflow and independent dual-Sigstore verification**](docs/R39_OWNER_GATED_PR10_SOURCE_BOUND_SIGNED_CI.md). A new, manually dispatched and main-gated workflow splits the exact PR10 Rust build (no OIDC) from protected-main attestation of both the artifact and its source-bound receipt. A separate read-only CLI invokes the existing pinned Rust/Sigstore verifier for both files; it cannot confuse a different signed main artifact with the PR. **The workflow is only proposed on a new branch directly from `main` and is not yet registered on protected `main`; no hosted CI, merge, dispatch or deployment occurred.** Review the owner gate before any activation.
+
 ## Contributing
 
 We welcome documented, reproducible upgrade examples with **synthetic or explicitly public data**. Never file issues containing private configs, tokens, internal endpoints, customer records or credentials. Prefer a version-pinned minimal fixture and the expected decision over a screenshot of production internals.
@@ -444,7 +448,7 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked --all-targets
 ```
 
-We intentionally have **no GitHub Actions workflow yet**. This is a public repository and it would be unsafe to run untrusted PR code on an owner-controlled, non-ephemeral self-hosted runner. A safe isolated public-PR CI solution is a separate engineering decision.
+The registered GitHub Actions workflows are **owner-gated manual workflows** (R11 and R20), not automatic PR runners. The new R39 manual PR-head proof is only a proposal on a separate development branch, and no untrusted PR code may run with signing permissions or on an owner-controlled, non-ephemeral self-hosted runner.
 
 ## Scope and safety
 

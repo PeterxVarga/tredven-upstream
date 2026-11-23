@@ -1,0 +1,40 @@
+{
+  "customer_payment_verified": false,
+  "decision": "HOLD_R39_WORKFLOW_NOT_REGISTERED_ON_DEFAULT_BRANCH",
+  "deployment_performed": false,
+  "development_branch_base_is_main": true,
+  "evidence_level": "REAL_PUBLIC_PR_AND_WORKFLOW_METADATA_PLUS_LOCAL_SIMULATED_CONTRACT",
+  "main_commit_observed": "61d1a12d88e822fdfa6ba652115cbf06132614df",
+  "main_workflow_registry_complete": true,
+  "main_workflows": [
+    ".github/workflows/r11-manual-public-osv-attest.yml",
+    ".github/workflows/r20-manual-alpha-provenance.yml"
+  ],
+  "merge_performed": false,
+  "new_branch_contract_sha256": "df3375b6f1328b9039e5218bda101ca6868795ebbef0443e2672240e4054ccf5",
+  "new_branch_workflow_sha256": "535f9f63c79e5567154f542d3deb10053a6a915e2b6d60ee94729b7a59281f80",
+  "next_owner_gate": "OWNER_REVIEW_AND_APPROVED_MAIN_MERGE_REQUIRED_BEFORE_SEPARATE_DISPATCH",
+  "observed_at": "2026-11-23T11:29:44.533985+00:00",
+  "original_main_signed_r20_cannot_count_as_pr10": true,
+  "original_pr": {
+    "base_commit": "44d6eef16de40e33474e578c0ffcd7a2e1b4c698",
+    "draft": true,
+    "number": 10,
+    "open": true,
+    "source_commit": "1c8a15ad84858bead99b88e655915975ceefb2e9",
+    "source_metadata_exact_preflight_passed": true
+  },
+  "public_repository_id": 1467524521,
+  "qualified_existing_gh_cli_sha256": "fa7cff06d4db9eee98e00b10ac93beebfe1822109ac04a6cbbf9d806c21d0073",
+  "qualified_existing_rust_verifier_sha256": "82a235129d523a9da8f36f9e9aedf4427b5cfe36d0c14b23f98242d4b5460809",
+  "r39_actual_hosted_ci_run_observed": false,
+  "r39_manual_workflow_registered_on_default_branch": false,
+  "repository": "PeterxVarga/tredven-upstream",
+  "run_authorized": false,
+  "schema": "tredven.upstream.r39.owner-ci-eligibility-observation.v1",
+  "source_urls": {
+    "current_main": "https://github.com/PeterxVarga/tredven-upstream/tree/main",
+    "original_pr": "https://github.com/PeterxVarga/tredven-upstream/pull/10",
+    "registered_workflows": "https://api.github.com/repos/PeterxVarga/tredven-upstream/actions/workflows"
+  }
+}

@@ -1,0 +1,220 @@
+# R39: owner-reviewable source-bound PR10 signed CI. NOT YET REGISTERED ON MAIN.
+# This file must be reviewed and explicitly merged into protected main before
+# a workflow_dispatch run can occur. Never dispatch from an unreviewed branch.
+# Two independent jobs ensure unreviewed PR code has NO OIDC/attestation rights.
+# No push/pull_request triggers, updater, deployment, release or customer data.
+name: R39 Owner-Gated PR10 Source-Bound Signed CI
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: r39-owner-exact-pr10-source-ci
+  cancel-in-progress: false
+
+jobs:
+  build-pr10-head:
+    if: >-
+      github.repository == 'PeterxVarga/tredven-upstream' &&
+      github.repository_id == 1467524521 &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'workflow_dispatch' &&
+      github.actor == 'PeterxVarga' &&
+      github.triggering_actor == 'PeterxVarga'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Read reviewed main workflow and source contract, without credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 SHA pinned
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Pin reviewed signer source and save trusted contract outside PR checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = 'PeterxVarga/tredven-upstream'
+          test "$GITHUB_REPOSITORY_ID" = '1467524521'
+          test "$GITHUB_REF" = 'refs/heads/main'
+          test "$GITHUB_EVENT_NAME" = 'workflow_dispatch'
+          test "$GITHUB_ACTOR" = 'PeterxVarga'
+          test "$GITHUB_TRIGGERING_ACTOR" = 'PeterxVarga'
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          test -s scripts/r39_pr_head_ci_contract.py
+          install -m 0400 scripts/r39_pr_head_ci_contract.py "$RUNNER_TEMP/r39-reviewed-contract.py"
+
+      - name: Check exact public draft PR #10 head and base before testing
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api -X GET 'repos/PeterxVarga/tredven-upstream/pulls/10' > "$RUNNER_TEMP/r39-pr10-original.json"
+          python3 -I -B "$RUNNER_TEMP/r39-reviewed-contract.py" preflight \
+            --pr-json "$RUNNER_TEMP/r39-pr10-original.json"
+
+      - name: Check out exact already-reviewed public PR head; never save token
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 SHA pinned
+        with:
+          ref: 1c8a15ad84858bead99b88e655915975ceefb2e9
+          persist-credentials: false
+          submodules: false
+
+      - name: Assert source commit before executing PR code without OIDC privileges
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = '1c8a15ad84858bead99b88e655915975ceefb2e9'
+          remote_url=$(git config --get remote.origin.url)
+          case "$remote_url" in
+            https://github.com/PeterxVarga/tredven-upstream|https://github.com/PeterxVarga/tredven-upstream.git) ;;
+            *) echo 'UNEXPECTED_PR_SOURCE_REPOSITORY' >&2; exit 2 ;;
+          esac
+          test -z "$(git status --porcelain --untracked-files=all)"
+          test -f Cargo.lock
+          test -f Cargo.toml
+
+      - name: Install pinned Rust toolchain and fetch locked dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.100.0 --profile minimal
+          cargo +1.100.0 fetch --locked
+
+      - name: Test and build EXACT PR head, no deployment or release
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +1.100.0 test --locked
+          cargo +1.100.0 build --locked --release
+          test -s target/release/tredven-upstream
+          test "$(git rev-parse HEAD)" = '1c8a15ad84858bead99b88e655915975ceefb2e9'
+
+      - name: Build reviewed unsigned PR-head artifact and byte-bound receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -m 0700 "$RUNNER_TEMP/r39-evidence"
+          tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 \
+            --numeric-owner -cf - -C target/release tredven-upstream \
+            | gzip -n > "$RUNNER_TEMP/r39-evidence/r39-pr10-rust-ci.tar.gz"
+          python3 -I -B "$RUNNER_TEMP/r39-reviewed-contract.py" make \
+            --pr-json "$RUNNER_TEMP/r39-pr10-original.json" \
+            --binary target/release/tredven-upstream \
+            --archive "$RUNNER_TEMP/r39-evidence/r39-pr10-rust-ci.tar.gz" \
+            --out "$RUNNER_TEMP/r39-evidence/r39-pr10-build.receipt.json"
+
+      - name: Upload only public unsigned CI evidence for the separate signer job
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4 SHA pinned
+        with:
+          name: r39-pr10-unsigned-build-evidence
+          path: |
+            ${{ runner.temp }}/r39-evidence/r39-pr10-rust-ci.tar.gz
+            ${{ runner.temp }}/r39-evidence/r39-pr10-build.receipt.json
+          retention-days: 7
+          if-no-files-found: error
+
+  attest-only-after-build:
+    needs: build-pr10-head
+    if: >-
+      needs.build-pr10-head.result == 'success' &&
+      github.repository == 'PeterxVarga/tredven-upstream' &&
+      github.repository_id == 1467524521 &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'workflow_dispatch' &&
+      github.actor == 'PeterxVarga' &&
+      github.triggering_actor == 'PeterxVarga'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout only protected main contract, never PR code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 SHA pinned
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Require exact trusted signer main source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = 'refs/heads/main'
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -s scripts/r39_pr_head_ci_contract.py
+
+      - name: Download exact unsigned artifact from this successful build job
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8 SHA pinned
+        with:
+          name: r39-pr10-unsigned-build-evidence
+          path: ${{ runner.temp }}/r39-evidence
+
+      - name: Recheck latest original PR source and ALL bytes before signing
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api -X GET 'repos/PeterxVarga/tredven-upstream/pulls/10' > "$RUNNER_TEMP/r39-pr10-signer-original.json"
+          python3 -I -B scripts/r39_pr_head_ci_contract.py verify \
+            --pr-json "$RUNNER_TEMP/r39-pr10-signer-original.json" \
+            --archive "$RUNNER_TEMP/r39-evidence/r39-pr10-rust-ci.tar.gz" \
+            --receipt "$RUNNER_TEMP/r39-evidence/r39-pr10-build.receipt.json"
+
+      - name: Sign exact archive with official GitHub Sigstore (no release)
+        id: signed_archive
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2 SHA pinned
+        with:
+          subject-path: ${{ runner.temp }}/r39-evidence/r39-pr10-rust-ci.tar.gz
+
+      - name: Sign exact PR identity and build receipt separately
+        id: signed_receipt
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2 SHA pinned
+        with:
+          subject-path: ${{ runner.temp }}/r39-evidence/r39-pr10-build.receipt.json
+
+      - name: Preserve both separately verified official attestation bundles
+        shell: bash
+        env:
+          ARCHIVE_BUNDLE: ${{ steps.signed_archive.outputs.bundle-path }}
+          RECEIPT_BUNDLE: ${{ steps.signed_receipt.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          for bundle in "$ARCHIVE_BUNDLE" "$RECEIPT_BUNDLE"; do
+            test -n "$bundle"
+            test -f "$bundle"
+            test ! -L "$bundle"
+            bytes=$(wc -c < "$bundle")
+            test "$bytes" -ge 500 && test "$bytes" -le 2097152
+          done
+          install -m 0600 "$ARCHIVE_BUNDLE" \
+            "$RUNNER_TEMP/r39-evidence/r39-archive.attestation.bundle.jsonl"
+          install -m 0600 "$RECEIPT_BUNDLE" \
+            "$RUNNER_TEMP/r39-evidence/r39-receipt.attestation.bundle.jsonl"
+
+      - name: Upload signed evidence only, no package registry or release
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4 SHA pinned
+        with:
+          name: r39-pr10-signed-build-proof
+          path: |
+            ${{ runner.temp }}/r39-evidence/r39-pr10-rust-ci.tar.gz
+            ${{ runner.temp }}/r39-evidence/r39-pr10-build.receipt.json
+            ${{ runner.temp }}/r39-evidence/r39-archive.attestation.bundle.jsonl
+            ${{ runner.temp }}/r39-evidence/r39-receipt.attestation.bundle.jsonl
+          retention-days: 7
+          if-no-files-found: error
+
+# NO deploy, NO release, NO push event, NO automatic PR trigger, NO merge.
+# A signed build receipt proves reviewed source claims, not rollback success,
+# production deployment, post-upgrade compatibility or owner acceptance.
